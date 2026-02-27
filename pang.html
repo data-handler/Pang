@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pang (starter)</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            background: #111;
+            color: #ddd;
+            font-family: system-ui, sans-serif;
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto;
+            background: #0b0f1a;
+        }
+
+        .hint {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 10px;
+            text-align: center;
+            font-size: 14px;
+            opacity: .8;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="c" width="900" height="520"></canvas>
+    <div class="hint">Move: A/D or ←/→ · Fire: Space</div>
+
+    <script>
+        (() => {
+            const canvas = document.getElementById("c");
+            const ctx = canvas.getContext("2d");
+
+            // --- constants ---
+            const W = canvas.width, H = canvas.height;
+            const FLOOR_Y = H - 40;
+
+            // --- input ---
+            const keys = new Set();
+            addEventListener("keydown", (e) => {
+                if (["ArrowLeft", "ArrowRight", " ", "a", "d", "A", "D"].includes(e.key)) e.preventDefault();
+                keys.add(e.key);
+            });
+            addEventListener("keyup", (e) => keys.delete(e.key));
+
+            // --- entities ---
+            const player = {
+                w: 34, h: 28,
+                x: W * 0.5, y: FLOOR_Y - 28,
+                vx: 0,
+                speed: 420 // px/s
+            };
+
+            let harpoon = null; // {x, yTop, yBottom, speed}
+
+            const BALL_SIZES = [60, 40, 25, 15];          // large -> small (radius)
+            const BALL_VX = [160, 190, 220, 250]; // was ~[220,260,310,360]
+            const BALL_BOUNCE_VY = [760, 700, 640, 580]; // optional: slightly less “float”
+            const GRAVITY = 1050; // optional: a touch lower if it feels too frantic
+
+            function createBall(size, x, y, dir = 1, vy = 0) {
+                return { size, r: BALL_SIZES[size], x, y, vx: BALL_VX[size] * dir, vy };
+            }
+
+            let balls = [createBall(0, W * 0.3, 120, 1)];
+
+            let score = 0;
+
+            // --- helpers ---
+            function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+            function fireHarpoon() {
+                if (harpoon) return; // one at a time (classic-ish)
+                harpoon = {
+                    x: player.x,
+                    yTop: player.y,
+                    yBottom: FLOOR_Y,
+                    speed: 900
+                };
+            }
+
+            // --- update ---
+            let last = performance.now();
+            function tick(now) {
+                const dt = Math.min(0.033, (now - last) / 1000);
+                last = now;
+
+                // player movement
+                let dir = 0;
+                if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) dir -= 1;
+                if (keys.has("ArrowRight") || keys.has("d") || keys.has("D")) dir += 1;
+                player.vx = dir * player.speed;
+                player.x += player.vx * dt;
+                player.x = clamp(player.x, player.w / 2, W - player.w / 2);
+
+                // fire
+                if (keys.has(" ")) fireHarpoon();
+
+                for (const b of balls) {
+                    b.vy += GRAVITY * dt;
+                    b.x += b.vx * dt;
+                    b.y += b.vy * dt;
+
+                    // wall bounces
+                    if (b.x - b.r < 0) { b.x = b.r; b.vx *= -1; }
+                    if (b.x + b.r > W) { b.x = W - b.r; b.vx *= -1; }
+
+                    // floor bounce (fixed height per size)
+                    if (b.y + b.r > FLOOR_Y) {
+                        b.y = FLOOR_Y - b.r;
+                        b.vy = -BALL_BOUNCE_VY[b.size];
+                    }
+                }
+
+                // harpoon (move + collide)
+                if (harpoon) {
+                    harpoon.yTop -= harpoon.speed * dt;
+
+                    if (harpoon.yTop < 0) {
+                        harpoon = null;
+                    } else {
+                        // check hit vs any ball
+                        for (let i = 0; i < balls.length; i++) {
+                            const b = balls[i];
+                            const withinX = Math.abs(b.x - harpoon.x) < b.r;
+                            const withinY = (b.y + b.r) > harpoon.yTop;
+
+                            if (withinX && withinY) {
+                                harpoon = null;
+                                score += 100;
+
+                                // remove + maybe split
+                                balls.splice(i, 1);
+
+                                const nextSize = b.size + 1;
+                                if (nextSize < BALL_SIZES.length) {
+                                    const kick = -BALL_BOUNCE_VY[nextSize] * 0.25;   // upward arc right after split
+                                    balls.push(createBall(nextSize, b.x - 8, b.y - 4, -1, kick));
+                                    balls.push(createBall(nextSize, b.x + 8, b.y - 4, 1, kick));
+                                }
+
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                draw();
+                requestAnimationFrame(tick);
+            }
+
+            // --- draw ---
+            function draw() {
+                ctx.clearRect(0, 0, W, H);
+
+                // floor
+                ctx.fillStyle = "#1a2236";
+                ctx.fillRect(0, FLOOR_Y, W, H - FLOOR_Y);
+
+                // player
+                ctx.fillStyle = "#7dd3fc";
+                ctx.fillRect(player.x - player.w / 2, player.y, player.w, player.h);
+
+                // harpoon
+                if (harpoon) {
+                    ctx.strokeStyle = "#fbbf24";
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(harpoon.x, harpoon.yBottom);
+                    ctx.lineTo(harpoon.x, harpoon.yTop);
+                    ctx.stroke();
+                }
+
+                // balls
+                ctx.fillStyle = "#f472b6";
+                for (const b of balls) {
+                    ctx.beginPath();
+                    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // HUD
+                ctx.fillStyle = "#cbd5e1";
+                ctx.font = "16px system-ui, sans-serif";
+                ctx.fillText(`Score: ${score}`, 14, 22);
+            }
+
+            requestAnimationFrame(tick);
+        })();
+    </script>
+</body>
+
+</html>
