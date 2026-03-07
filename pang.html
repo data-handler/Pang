@@ -57,25 +57,60 @@
             // --- entities ---
             const player = {
                 w: 34, h: 28,
-                x: W * 0.5, y: FLOOR_Y - 28,
+                x: W * 0.5, y: FLOOR_Y - 48,
                 vx: 0,
-                speed: 420 // px/s
+                speed: 240, // px/s,
+                facing: 1,   // 1 = right, -1 = left
+                moving: false
             };
 
             let harpoon = null; // {x, yTop, yBottom, speed}
 
+            const LEVELS = [
+                {
+                    name: "Meadow",
+                    bg: "meadow",
+                    balls: [
+                        { size: 0, x: 140, y: 100, dir: 1 }
+                    ]
+                },
+                {
+                    name: "Sunset",
+                    bg: "sunset",
+                    balls: [
+                        { size: 0, x: 180, y: 100, dir: 1 },
+                        { size: 2, x: 520, y: 160, dir: -1 }
+                    ]
+                },
+                {
+                    name: "Night",
+                    bg: "night",
+                    balls: [
+                        { size: 1, x: 180, y: 120, dir: 1 },
+                        { size: 1, x: 500, y: 120, dir: -1 },
+                        { size: 3, x: 340, y: 80, dir: 1 }
+                    ]
+                }
+            ];
+
+
             const BALL_SIZES = [60, 40, 25, 15];          // large -> small (radius)
-            const BALL_VX = [160, 190, 220, 250]; // was ~[220,260,310,360]
-            const BALL_BOUNCE_VY = [760, 700, 640, 580]; // optional: slightly less “float”
-            const GRAVITY = 1050; // optional: a touch lower if it feels too frantic
+            const BALL_VX = [120, 145, 170, 195];
+            const BALL_BOUNCE_VY = [720, 670, 620, 570];
+            const GRAVITY = 980;
 
             function createBall(size, x, y, dir = 1, vy = 0) {
                 return { size, r: BALL_SIZES[size], x, y, vx: BALL_VX[size] * dir, vy };
             }
 
-            let balls = [createBall(0, W * 0.3, 120, 1)];
+            let balls = [];
 
             let score = 0;
+            let lives = 3;
+            let levelClear = false;
+            let playerDead = false;
+            let deathTimer = 0;
+            let levelIndex = 0;
 
             // --- helpers ---
             function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -90,16 +125,56 @@
                 };
             }
 
+            function resetLevel() {
+                loadLevel(levelIndex);
+            }
+
+            function loadLevel(index) {
+                const level = LEVELS[index];
+
+                balls = level.balls.map(b => createBall(b.size, b.x, b.y, b.dir));
+                harpoon = null;
+                player.x = W * 0.5;
+
+                playerDead = false;
+                deathTimer = 0;
+                levelClear = false;
+            }
+
             // --- update ---
             let last = performance.now();
             function tick(now) {
                 const dt = Math.min(0.033, (now - last) / 1000);
                 last = now;
 
+                if (playerDead) {
+                    deathTimer -= dt;
+                    if (deathTimer <= 0) {
+                        if (lives > 0) {
+                            resetLevel();
+                        }
+                    }
+                    draw();
+                    requestAnimationFrame(tick);
+                    return;
+                }
+
+                if (balls.length === 0 && !levelClear) {
+                    levelClear = true;
+
+                    setTimeout(() => {
+                        levelIndex = (levelIndex + 1) % LEVELS.length;
+                        loadLevel(levelIndex);
+                    }, 1200);
+                }
+
                 // player movement
                 let dir = 0;
                 if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) dir -= 1;
                 if (keys.has("ArrowRight") || keys.has("d") || keys.has("D")) dir += 1;
+
+                player.moving = dir !== 0;
+                if (dir !== 0) player.facing = dir;
                 player.vx = dir * player.speed;
                 player.x += player.vx * dt;
                 player.x = clamp(player.x, player.w / 2, W - player.w / 2);
@@ -120,6 +195,23 @@
                     if (b.y + b.r > FLOOR_Y) {
                         b.y = FLOOR_Y - b.r;
                         b.vy = -BALL_BOUNCE_VY[b.size];
+                    }
+                }
+
+                if (!playerDead) {
+                    for (const b of balls) {
+                        const closestX = Math.max(player.x - 10, Math.min(b.x, player.x + 10));
+                        const closestY = Math.max(player.y, Math.min(b.y, player.y + 32));
+                        const dx = b.x - closestX;
+                        const dy = b.y - closestY;
+
+                        if ((dx * dx + dy * dy) < (b.r * b.r)) {
+                            playerDead = true;
+                            deathTimer = 1.0;
+                            harpoon = null;
+                            lives--;
+                            break;
+                        }
                     }
                 }
 
@@ -156,46 +248,288 @@
                     }
                 }
 
+                if (balls.length === 0) {
+                    levelClear = true;
+                }
+
                 draw();
                 requestAnimationFrame(tick);
             }
 
+            function drawBackground() {
+                const bg = LEVELS[levelIndex].bg;
+
+                if (bg === "meadow") {
+                    // sky
+                    ctx.fillStyle = "#38bdf8";
+                    ctx.fillRect(0, 0, W, FLOOR_Y);
+
+                    // distant hills
+                    ctx.fillStyle = "#65a30d";
+                    ctx.beginPath();
+                    ctx.moveTo(0, FLOOR_Y - 90);
+                    ctx.quadraticCurveTo(140, FLOOR_Y - 150, 300, FLOOR_Y - 95);
+                    ctx.quadraticCurveTo(440, FLOOR_Y - 140, 620, FLOOR_Y - 100);
+                    ctx.quadraticCurveTo(760, FLOOR_Y - 130, W, FLOOR_Y - 85);
+                    ctx.lineTo(W, FLOOR_Y);
+                    ctx.lineTo(0, FLOOR_Y);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // grass band
+                    ctx.fillStyle = "#84cc16";
+                    ctx.fillRect(0, FLOOR_Y - 35, W, 35);
+                }
+
+                else if (bg === "sunset") {
+                    const grad = ctx.createLinearGradient(0, 0, 0, FLOOR_Y);
+                    grad.addColorStop(0, "#f97316");
+                    grad.addColorStop(0.45, "#fb7185");
+                    grad.addColorStop(1, "#7c3aed");
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(0, 0, W, FLOOR_Y);
+
+                    // sun
+                    ctx.beginPath();
+                    ctx.arc(W - 140, 100, 45, 0, Math.PI * 2);
+                    ctx.fillStyle = "rgba(255,255,180,0.75)";
+                    ctx.fill();
+
+                    // mountains
+                    ctx.fillStyle = "#334155";
+                    ctx.beginPath();
+                    ctx.moveTo(80, FLOOR_Y);
+                    ctx.lineTo(260, FLOOR_Y - 180);
+                    ctx.lineTo(430, FLOOR_Y);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    ctx.beginPath();
+                    ctx.moveTo(320, FLOOR_Y);
+                    ctx.lineTo(560, FLOOR_Y - 140);
+                    ctx.lineTo(760, FLOOR_Y);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // ground band
+                    ctx.fillStyle = "#166534";
+                    ctx.fillRect(0, FLOOR_Y - 28, W, 28);
+                }
+
+                else if (bg === "night") {
+                    const grad = ctx.createLinearGradient(0, 0, 0, FLOOR_Y);
+                    grad.addColorStop(0, "#020617");
+                    grad.addColorStop(1, "#0f172a");
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(0, 0, W, FLOOR_Y);
+
+                    // moon
+                    ctx.beginPath();
+                    ctx.arc(W - 120, 90, 30, 0, Math.PI * 2);
+                    ctx.fillStyle = "#e2e8f0";
+                    ctx.fill();
+
+                    // stars
+                    ctx.fillStyle = "rgba(255,255,255,0.8)";
+                    const stars = [
+                        [80, 60], [160, 110], [240, 70], [320, 130], [420, 55],
+                        [520, 95], [610, 60], [730, 120], [810, 75]
+                    ];
+                    for (const [x, y] of stars) {
+                        ctx.fillRect(x, y, 2, 2);
+                    }
+
+                    // city / hills
+                    ctx.fillStyle = "#1e293b";
+                    ctx.fillRect(0, FLOOR_Y - 55, W, 55);
+
+                    ctx.fillStyle = "#0f172a";
+                    for (let i = 0; i < W; i += 60) {
+                        const h = 20 + (i % 120 === 0 ? 45 : 30);
+                        ctx.fillRect(i, FLOOR_Y - h, 36, h);
+                    }
+                }
+            }
+
             // --- draw ---
             function draw() {
-                ctx.clearRect(0, 0, W, H);
+                drawBackground();
 
-                // floor
-                ctx.fillStyle = "#1a2236";
+                // floor base
+                ctx.fillStyle = "#2563eb";
                 ctx.fillRect(0, FLOOR_Y, W, H - FLOOR_Y);
 
-                // player
-                ctx.fillStyle = "#7dd3fc";
-                ctx.fillRect(player.x - player.w / 2, player.y, player.w, player.h);
+                // brick pattern
+                const brickW = 28;
+                const brickH = 10;
 
-                // harpoon
-                if (harpoon) {
-                    ctx.strokeStyle = "#fbbf24";
+                for (let row = 0; row < Math.ceil((H - FLOOR_Y) / brickH); row++) {
+                    for (let col = 0; col < Math.ceil(W / brickW) + 1; col++) {
+                        const offset = (row % 2) * (brickW / 2);
+                        const x = col * brickW - offset;
+                        const y = FLOOR_Y + row * brickH;
+
+                        ctx.strokeStyle = "#93c5fd";
+                        ctx.lineWidth = 1;
+                        ctx.strokeRect(x, y, brickW, brickH);
+                    }
+                }
+
+                // player (larger pang-style boy)
+                if (!playerDead) {
+                    const px = player.x;
+                    const py = player.y;
+
+                    const scale = 1.5;
+
+                    ctx.save();
+                    ctx.translate(px, py);
+                    ctx.scale(scale, scale);
+                    ctx.translate(-px, -py);
+
+                    if (!player.moving) {
+
+                        ctx.fillStyle = "#d6d3d1";
+                        ctx.fillRect(px - 8, py + 10, 16, 18);
+
+                        ctx.fillStyle = "#f5d0a9";
+                        ctx.beginPath();
+                        ctx.arc(px, py + 6, 7, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        ctx.fillStyle = "#2563eb";
+                        ctx.fillRect(px - 8, py - 1, 16, 5);
+
+                        ctx.fillStyle = "#fbbf24";
+                        ctx.fillRect(px - 7, py + 28, 6, 4);
+                        ctx.fillRect(px + 1, py + 28, 6, 4);
+
+                        ctx.strokeStyle = "#111827";
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(px - 3, py + 14);
+                        ctx.lineTo(px - 3, py + 24);
+                        ctx.moveTo(px + 3, py + 14);
+                        ctx.lineTo(px + 3, py + 24);
+                        ctx.stroke();
+
+                    } else {
+
+                        const f = player.facing;
+
+                        ctx.fillStyle = "#d6d3d1";
+                        ctx.fillRect(px - 7, py + 10, 14, 18);
+
+                        ctx.fillStyle = "#f5d0a9";
+                        ctx.beginPath();
+                        ctx.arc(px, py + 6, 7, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        ctx.fillStyle = "#2563eb";
+                        ctx.fillRect(px - 8, py - 1, 16, 5);
+
+                        ctx.fillStyle = "#fbbf24";
+                        ctx.fillRect(px - 6, py + 28, 6, 4);
+                        ctx.fillRect(px + 1, py + 28, 6, 4);
+
+                        ctx.fillRect(px + (f * 5), py + 5, 3 * f, 2);
+
+                        ctx.strokeStyle = "#e5e7eb";
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(px, py + 16);
+                        ctx.lineTo(px + (f * 12), py + 14);
+                        ctx.stroke();
+                    }
+                }
+
+                if (playerDead) {
+                    ctx.strokeStyle = "#ffffff";
                     ctx.lineWidth = 3;
                     ctx.beginPath();
-                    ctx.moveTo(harpoon.x, harpoon.yBottom);
-                    ctx.lineTo(harpoon.x, harpoon.yTop);
+                    ctx.moveTo(player.x - 12, player.y + 4);
+                    ctx.lineTo(player.x + 12, player.y + 28);
+                    ctx.moveTo(player.x + 12, player.y + 4);
+                    ctx.lineTo(player.x - 12, player.y + 28);
                     ctx.stroke();
                 }
 
+                ctx.restore();
+
+                // harpoon (curly pang-style cable)
+                if (harpoon) {
+                    ctx.strokeStyle = "#d1d5db";
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(harpoon.x, harpoon.yBottom);
+
+                    for (let y = harpoon.yBottom; y >= harpoon.yTop; y -= 8) {
+                        const offset = Math.sin((harpoon.yBottom - y) * 0.18) * 3;
+                        ctx.lineTo(harpoon.x + offset, y);
+                    }
+
+                    ctx.stroke();
+
+                    // arrow head
+                    ctx.beginPath();
+                    ctx.moveTo(harpoon.x, harpoon.yTop - 6);
+                    ctx.lineTo(harpoon.x - 5, harpoon.yTop + 4);
+                    ctx.lineTo(harpoon.x + 5, harpoon.yTop + 4);
+                    ctx.closePath();
+                    ctx.fillStyle = "#d1d5db";
+                    ctx.fill();
+
+                    // red bead
+                    ctx.beginPath();
+                    ctx.arc(harpoon.x, harpoon.yTop + 10, 4, 0, Math.PI * 2);
+                    ctx.fillStyle = "#ef4444";
+                    ctx.fill();
+                }
+
                 // balls
-                ctx.fillStyle = "#f472b6";
                 for (const b of balls) {
+                    // fill
                     ctx.beginPath();
                     ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+                    ctx.fillStyle = "rgba(244, 114, 182, 0.20)";
                     ctx.fill();
+
+                    // outer rim
+                    ctx.lineWidth = 4;
+                    ctx.strokeStyle = "rgba(244, 180, 220, 0.95)";
+                    ctx.stroke();
+
+                    // inner rim
+                    ctx.beginPath();
+                    ctx.arc(b.x, b.y, b.r - 4, 0, Math.PI * 2);
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeStyle = "rgba(255, 220, 240, 0.35)";
+                    ctx.stroke();
+
+                    // highlight
+                    ctx.beginPath();
+                    ctx.arc(b.x - b.r * 0.28, b.y - b.r * 0.28, b.r * 0.18, 0, Math.PI * 2);
+                    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+                    ctx.fill();
+                }
+
+                if (levelClear) {
+                    ctx.fillStyle = "#ffffff";
+                    ctx.font = "bold 48px system-ui, sans-serif";
+                    ctx.textAlign = "center";
+                    ctx.fillText("LEVEL CLEAR", W / 2, H / 2);
+                    ctx.textAlign = "left";
                 }
 
                 // HUD
                 ctx.fillStyle = "#cbd5e1";
                 ctx.font = "16px system-ui, sans-serif";
                 ctx.fillText(`Score: ${score}`, 14, 22);
+                ctx.fillText(`Lives: ${lives}`, 14, 42);
+                ctx.fillText(`Level: ${LEVELS[levelIndex].name}`, 14, 62);
             }
 
+            loadLevel(levelIndex);
             requestAnimationFrame(tick);
         })();
     </script>
