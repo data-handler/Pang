@@ -553,6 +553,7 @@
             let platforms = [];
             let powerUps = [];
             let bullets = [];
+            let highScores = [];
 
             let gameState = "startup";
             let startupBlinkTimer = 0;
@@ -582,6 +583,16 @@
             let paused = false;
 
             // --- helpers ---
+
+            async function loadHighScores() {
+                try {
+                    const res = await fetch("/scores");
+                    if (!res.ok) return;
+                    highScores = await res.json();
+                } catch {
+                    highScores = [];
+                }
+            }
 
             function clamp(value, min, max) {
                 return Math.max(min, Math.min(max, value));
@@ -1336,13 +1347,101 @@
                 drawPowerUps();
                 drawHud();
                 drawLives();
-                drawAudioStatus();
                 drawScreens();
 
                 ctx.restore();
 
                 drawFlash();
                 drawFrame();
+                drawBorderText();
+                drawAudioStatus();
+            }
+
+            function drawTopScores(x, y) {
+                ctx.textAlign = "center";
+
+                ctx.font = "bold 20px system-ui, sans-serif";
+                ctx.fillStyle = "#fde68a";
+                ctx.fillText("TOP 3", x, y);
+
+                for (let i = 0; i < 3; i++) {
+                    const entry = highScores[i];
+                    const yy = y + 30 + i * 24;
+
+                    let color = "#e5e7eb";
+                    if (i === 0) color = "#fde68a";
+                    else if (i === 1) color = "#d1d5db";
+                    else if (i === 2) color = "#fdba74";
+
+                    ctx.font = "bold 16px system-ui, sans-serif";
+                    ctx.fillStyle = color;
+
+                    if (entry) {
+                        const initials = entry.initials ?? entry.Initials;
+                        const points = entry.points ?? entry.Points;
+                        ctx.fillText(`${i + 1}. ${initials}  ${points}`, x, yy);
+                    } else {
+                        ctx.fillText(`${i + 1}. ---  0`, x, yy);
+                    }
+                }
+
+                ctx.textAlign = "left";
+            }
+
+            function drawFullScores(x, y) {
+                ctx.textAlign = "center";
+
+                ctx.fillStyle = "#fde68a";
+                ctx.font = "bold 30px system-ui, sans-serif";
+                ctx.fillText("HIGH SCORES", x, y);
+
+                const startY = y + 40;
+                const rankX = x - 220;
+                const initialsX = x - 110;
+                const scoreX = x + 30;
+                const levelX = x + 170;
+
+                ctx.textAlign = "left";
+                ctx.font = "bold 16px system-ui, sans-serif";
+                ctx.fillStyle = "#93c5fd";
+                ctx.fillText("RK", rankX, startY);
+                ctx.fillText("NAME", initialsX, startY);
+                ctx.fillText("SCORE", scoreX, startY);
+                ctx.fillText("LEVEL", levelX, startY);
+
+                for (let i = 0; i < 10; i++) {
+                    const entry = highScores[i];
+                    const rowY = startY + 30 + i * 24;
+
+                    let color = "#e5e7eb";
+                    if (i === 0) color = "#fde68a";
+                    else if (i === 1) color = "#d1d5db";
+                    else if (i === 2) color = "#fdba74";
+
+                    ctx.fillStyle = "rgba(15, 23, 42, 0.35)";
+                    ctx.fillRect(rankX - 12, rowY - 17, 470, 20);
+
+                    ctx.fillStyle = color;
+                    ctx.font = "bold 15px system-ui, sans-serif";
+                    ctx.fillText(`${i + 1}.`, rankX, rowY);
+
+                    if (entry) {
+                        const initials = entry.initials ?? entry.Initials;
+                        const points = entry.points ?? entry.Points;
+                        const level = entry.level ?? entry.Level;
+
+                        ctx.fillText(initials, initialsX, rowY);
+                        ctx.fillText(String(points), scoreX, rowY);
+                        ctx.fillText(String(level), levelX, rowY);
+                    } else {
+                        ctx.fillStyle = "#64748b";
+                        ctx.fillText("---", initialsX, rowY);
+                        ctx.fillText("0", scoreX, rowY);
+                        ctx.fillText("-", levelX, rowY);
+                    }
+                }
+
+                ctx.textAlign = "left";
             }
 
             function applyScreenShake() {
@@ -1494,41 +1593,42 @@
 
                     ctx.fillStyle = "#cbd5e1";
                     ctx.font = "24px system-ui, sans-serif";
-                    ctx.fillText("Move: A / D or Arrow Keys", W / 2, 245);
-                    ctx.fillText("Fire: Space", W / 2, 280);
+                    ctx.fillText("Move: A / D or Arrow Keys", W / 2, 210);
+                    ctx.fillText("Fire: Space", W / 2, 240);
 
                     ctx.fillStyle = "#93c5fd";
                     ctx.font = "18px system-ui, sans-serif";
-                    ctx.fillText("Power-ups: Twin Harpoon, Gun, Freeze, Bomb", W / 2, 340);
 
                     if (Math.floor(startupBlinkTimer * 2) % 2 === 0) {
                         ctx.fillStyle = "#ffffff";
                         ctx.font = "bold 28px system-ui, sans-serif";
-                        ctx.fillText("PRESS SPACE TO START", W / 2, 420);
+                        ctx.fillText("PRESS SPACE TO START", W / 2, 320);
                     }
 
-                    ctx.fillStyle = "#94a3b8";
-                    ctx.font = "14px system-ui, sans-serif";
-                    ctx.fillText("© Gelder Arcade Systems", W / 2, H - 30);
+                    drawTopScores(W / 2, 355);
 
                     ctx.textAlign = "left";
                 }
 
                 if (gameState === "gameover") {
-                    ctx.fillStyle = "rgba(0,0,0,0.5)";
+                    ctx.fillStyle = "rgba(0,0,0,0.6)";
                     ctx.fillRect(0, 0, W, H);
 
                     ctx.fillStyle = "#ffffff";
                     ctx.textAlign = "center";
 
-                    ctx.font = "bold 60px system-ui, sans-serif";
-                    ctx.fillText("GAME OVER", W / 2, H / 2 - 20);
-
-                    ctx.font = "28px system-ui, sans-serif";
-                    ctx.fillText(`Score: ${score}`, W / 2, H / 2 + 10);
+                    ctx.font = "bold 52px system-ui, sans-serif";
+                    ctx.fillText("GAME OVER", W / 2, 60);
 
                     ctx.font = "24px system-ui, sans-serif";
-                    ctx.fillText("Press Space to Restart", W / 2, H / 2 + 50);
+                    ctx.fillText(`Your Score: ${score}`, W / 2, 95);
+                    ctx.fillText(`Level Reached: ${levelIndex + 1}`, W / 2, 125);
+
+                    drawFullScores(W / 2, 170);
+
+                    ctx.font = "22px system-ui, sans-serif";
+                    ctx.fillStyle = "#ffffff";
+                    ctx.fillText("Press Space to Restart", (W / 2) - 120, H - 28);
 
                     ctx.textAlign = "left";
                 }
@@ -2046,7 +2146,7 @@
 
                 const x = 24;
                 const y = 34;
-                const gap = 22;
+                const gap = 26;
                 const labelColor = "#dbeafe";
                 const valueColor = "#ffffff";
 
@@ -2081,7 +2181,7 @@
                     ctx.fillStyle = labelColor;
                     ctx.fillText("WEAPON", x, yy);
 
-                    const iconX = x + 82;
+                    const iconX = x + 86;
                     const iconY = yy - 2;
 
                     ctx.save();
@@ -2101,14 +2201,14 @@
                 if (freezeTimer > 0) {
                     const shouldDraw = freezeTimer >= 2 || Math.floor(freezeTimer * 10) % 2 === 0;
                     if (shouldDraw) {
-                        const yy = y + gap * 4;
+                        const yy = y + gap * 4.1;
 
                         ctx.font = "bold 12px system-ui, sans-serif";
                         ctx.fillStyle = labelColor;
                         ctx.fillText("FREEZE", x, yy);
 
                         ctx.save();
-                        ctx.translate(x + 104, yy - 4);
+                        ctx.translate(x + 86, yy - 4);
                         ctx.scale(0.45, 0.45);
                         drawFreezePowerUp();
                         ctx.restore();
@@ -2186,30 +2286,12 @@
                 if (gameState !== "playing") return;
 
                 const text = `P Pause   M Music ${musicMuted ? "Off" : "On"}   S SFX ${sfxMuted ? "Off" : "On"}`;
-                const y = H - 22;
 
                 ctx.save();
                 ctx.font = "bold 12px system-ui, sans-serif";
-                ctx.textAlign = "center";
-
-                ctx.fillStyle = "rgba(15, 23, 42, 0.35)";
-                const metrics = ctx.measureText(text);
-                const padX = 12;
-                const boxW = metrics.width + padX * 2;
-                const boxH = 20;
-                const boxX = (W - boxW) / 2;
-                const boxY = y - 15;
-
-                ctx.fillRect(boxX, boxY, boxW, boxH);
-
-                ctx.strokeStyle = "rgba(147, 197, 253, 0.25)";
-                ctx.lineWidth = 1;
-                ctx.strokeRect(boxX, boxY, boxW, boxH);
-
-                ctx.fillStyle = "#dbeafe";
-                ctx.fillText(text, W / 2, y);
-
                 ctx.textAlign = "left";
+                ctx.fillStyle = "#dbeafe";
+                ctx.fillText(text, BORDER, H);
                 ctx.restore();
             }
 
@@ -2231,6 +2313,18 @@
                 ctx.strokeRect(BORDER, BORDER, W - BORDER * 2, H - BORDER * 2);
             }
 
+            function drawBorderText() {
+                if (gameState !== "startup" && gameState !== "gameover") return;
+
+                ctx.save();
+                ctx.textAlign = "center";
+                ctx.font = "12px system-ui, sans-serif";
+                ctx.fillStyle = "#dbeafe";
+                ctx.fillText("© Gelder Arcade Systems", W / 2, H);
+                ctx.restore();
+            }
+
+            loadHighScores();
             requestAnimationFrame(tick);
         })();
     </script>
