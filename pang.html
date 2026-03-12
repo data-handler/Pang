@@ -462,6 +462,60 @@
             };
 
             addEventListener("keydown", (e) => {
+                if (gameState === "gameover" && enteringScore) {
+                    if (e.code === "Tab") {
+                        e.preventDefault();
+                        initialsIndex = (initialsIndex + (e.shiftKey ? 2 : 1)) % 3;
+                        return;
+                    }
+
+                    if (e.code === "Backspace") {
+                        e.preventDefault();
+                        initials[initialsIndex] = "A";
+                        if (initialsIndex > 0) initialsIndex--;
+                        return;
+                    }
+
+                    if (e.code === "ArrowLeft") {
+                        e.preventDefault();
+                        initialsIndex = Math.max(0, initialsIndex - 1);
+                        return;
+                    }
+
+                    if (e.code === "ArrowRight") {
+                        e.preventDefault();
+                        initialsIndex = Math.min(2, initialsIndex + 1);
+                        return;
+                    }
+
+                    if (e.code === "ArrowUp") {
+                        e.preventDefault();
+                        const c = initials[initialsIndex].charCodeAt(0);
+                        initials[initialsIndex] = c >= 90 ? "A" : String.fromCharCode(c + 1);
+                        return;
+                    }
+
+                    if (e.code === "ArrowDown") {
+                        e.preventDefault();
+                        const c = initials[initialsIndex].charCodeAt(0);
+                        initials[initialsIndex] = c <= 65 ? "Z" : String.fromCharCode(c - 1);
+                        return;
+                    }
+
+                    if (/^[a-zA-Z]$/.test(e.key)) {
+                        e.preventDefault();
+                        initials[initialsIndex] = e.key.toUpperCase();
+                        if (initialsIndex < 2) initialsIndex++;
+                        return;
+                    }
+
+                    if (e.code === "Enter" || e.code === "Space") {
+                        e.preventDefault();
+                        submitScore();
+                        enteringScore = false;
+                        return;
+                    }
+                }
 
                 if (e.code === "KeyP") {
                     paused = !paused;
@@ -582,6 +636,12 @@
             let sfxMuted = false;
             let paused = false;
 
+            let sessionToken = null;
+            let enteringScore = false;
+            let initials = ["A", "A", "A"];
+            let initialsIndex = 0;
+            let scoreSubmitted = false;
+
             // --- helpers ---
 
             async function loadHighScores() {
@@ -592,6 +652,57 @@
                 } catch {
                     highScores = [];
                 }
+            }
+
+            async function startScoreSession() {
+                try {
+                    const res = await fetch("/session");
+                    if (!res.ok) {
+                        sessionToken = null;
+                        return;
+                    }
+
+                    const data = await res.json();
+                    sessionToken = data.token;
+                } catch {
+                    sessionToken = null;
+                }
+            }
+
+            async function submitScore() {
+                if (!sessionToken || scoreSubmitted) return;
+
+                try {
+                    const res = await fetch("/scores", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-Game-Token": sessionToken
+                        },
+                        body: JSON.stringify({
+                            initials: initials.join(""),
+                            points: score,
+                            level: levelIndex + 1
+                        })
+                    });
+
+                    if (res.ok) {
+                        highScores = await res.json();
+                        scoreSubmitted = true;
+                    }
+                } catch {
+                    // ignore for now
+                }
+            }
+
+            function qualifiesForHighScore() {
+                if (highScores.length < 10) return true;
+
+                const last = highScores[highScores.length - 1];
+                const lastPoints = last.points ?? last.Points ?? 0;
+                const lastLevel = last.level ?? last.Level ?? 0;
+
+                return score > lastPoints || (score === lastPoints && (levelIndex + 1) > lastLevel);
             }
 
             function clamp(value, min, max) {
@@ -636,7 +747,14 @@
                 freezeTimer = 0;
             }
 
-            function startGame() {
+            async function startGame() {
+                await startScoreSession();
+
+                enteringScore = false;
+                initials = ["A", "A", "A"];
+                initialsIndex = 0;
+                scoreSubmitted = false;
+
                 resetRunState();
                 loadLevel(levelIndex);
             }
@@ -950,6 +1068,8 @@
             }
 
             function updateGameOverState() {
+                if (enteringScore) return;
+
                 if (consumeFirePress()) {
                     startGame();
                 }
@@ -966,6 +1086,8 @@
                             currentMusicTrack.currentTime = 0;
                             currentMusicTrack = null;
                         }
+
+                        enteringScore = qualifiesForHighScore();
                         gameState = "gameover";
                     }
                 }
@@ -1624,14 +1746,59 @@
                     ctx.fillText(`Your Score: ${score}`, W / 2, 95);
                     ctx.fillText(`Level Reached: ${levelIndex + 1}`, W / 2, 125);
 
-                    drawFullScores(W / 2, 170);
+                    if (enteringScore) {
+                        drawInitialsEntry(W / 2, 165);
+                    } else {
+                        drawFullScores(W / 2, 170);
 
-                    ctx.font = "22px system-ui, sans-serif";
-                    ctx.fillStyle = "#ffffff";
-                    ctx.fillText("Press Space to Restart", (W / 2) - 120, H - 28);
+                        ctx.font = "22px system-ui, sans-serif";
+                        ctx.fillStyle = "#ffffff";
+                        ctx.fillText("Press Space to Restart", W / 2, H - 28);
+                    }
 
                     ctx.textAlign = "left";
                 }
+            }
+
+            function drawInitialsEntry(x, y) {
+                ctx.textAlign = "center";
+
+                ctx.fillStyle = "#fde68a";
+                ctx.font = "bold 28px system-ui, sans-serif";
+                ctx.fillText("NEW HIGH SCORE!", x, y);
+
+                ctx.fillStyle = "#cbd5e1";
+                ctx.font = "18px system-ui, sans-serif";
+                ctx.fillText("Enter Your Initials", x, y + 32);
+
+                const startX = x - 50;
+                const boxY = y + 60;
+                const boxW = 28;
+                const boxH = 36;
+                const gap = 18;
+
+                for (let i = 0; i < 3; i++) {
+                    const bx = startX + i * (boxW + gap);
+
+                    ctx.fillStyle = i === initialsIndex ? "rgba(253, 230, 138, 0.25)" : "rgba(15, 23, 42, 0.45)";
+                    ctx.fillRect(bx, boxY, boxW, boxH);
+
+                    ctx.strokeStyle = i === initialsIndex ? "#fde68a" : "#93c5fd";
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(bx, boxY, boxW, boxH);
+
+                    ctx.fillStyle = "#ffffff";
+                    ctx.font = "bold 24px system-ui, sans-serif";
+                    ctx.fillText(initials[i], bx + boxW / 2, boxY + 26);
+                }
+
+                ctx.fillStyle = "#cbd5e1";
+                ctx.font = "16px system-ui, sans-serif";
+                ctx.fillText("Type letters  •  Tab moves  •  Enter confirms", x, boxY + 62);
+
+                drawFullScores(W / 2, boxY + 110);
+
+                ctx.textAlign = "left";
             }
 
             function drawHudHarpoonIcon() {
@@ -2324,8 +2491,10 @@
                 ctx.restore();
             }
 
-            loadHighScores();
-            requestAnimationFrame(tick);
+            (async () => {
+                await loadHighScores();
+                requestAnimationFrame(tick);
+            })();
         })();
     </script>
 </body>
