@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>Pang (starter)</title>
     <style>
         html,
@@ -13,6 +13,7 @@
             background: #111;
             color: #ddd;
             font-family: system-ui, sans-serif;
+            touch-action: manipulation;
         }
 
         body {
@@ -120,6 +121,9 @@
                 right: document.getElementById("touchRight"),
                 fire: document.getElementById("touchFire")
             };
+            const isTouchDevice = window.matchMedia("(pointer: coarse)").matches || (navigator.maxTouchPoints || 0) > 0;
+            const startupActionText = isTouchDevice ? "TAP FIRE TO START" : "PRESS SPACE TO START";
+            const restartActionText = isTouchDevice ? "Tap FIRE to Restart" : "Press Space to Restart";
 
             const sounds = {
                 shoot: new Audio("sounds/shoot.wav"),
@@ -854,7 +858,7 @@
             let musicMuted = false;
             let sfxMuted = false;
             let paused = false;
-            let reduceMotion = false;
+            let reduceMotion = isTouchDevice || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
             let highContrastMode = false;
             let aimAssist = false;
             let timerAssist = false;
@@ -2129,7 +2133,7 @@
                     if (Math.floor(startupBlinkTimer * 2) % 2 === 0) {
                         ctx.fillStyle = "#ffffff";
                         ctx.font = "bold 28px system-ui, sans-serif";
-                        ctx.fillText("PRESS SPACE TO START", W / 2, 320);
+                        ctx.fillText(startupActionText, W / 2, 320);
                     }
 
                     drawTopScores(W / 2, 355);
@@ -2158,7 +2162,7 @@
 
                         ctx.font = "22px system-ui, sans-serif";
                         ctx.fillStyle = "#ffffff";
-                        ctx.fillText("Press Space to Restart", W / 2, H - 28);
+                        ctx.fillText(restartActionText, W / 2, H - 28);
                     }
 
                     ctx.textAlign = "left";
@@ -2966,6 +2970,24 @@
             bindTouchControl(touchButtons.left, "left");
             bindTouchControl(touchButtons.right, "right");
             bindTouchControl(touchButtons.fire, "fire");
+
+            let lastTouchEnd = 0;
+            addEventListener("touchend", (event) => {
+                if (!event.cancelable) return;
+                const now = performance.now();
+                if (now - lastTouchEnd < 350) {
+                    event.preventDefault();
+                }
+                lastTouchEnd = now;
+            }, { passive: false });
+
+            addEventListener("gesturestart", (event) => {
+                if (event.cancelable) event.preventDefault();
+            }, { passive: false });
+
+            addEventListener("dblclick", (event) => {
+                if (event.cancelable) event.preventDefault();
+            });
 
             addEventListener("resize", resizeCanvasToViewport);
             addEventListener("orientationchange", resizeCanvasToViewport);
