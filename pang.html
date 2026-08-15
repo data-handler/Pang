@@ -16,16 +16,24 @@
         }
 
         body {
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            overflow: hidden;
+        }
+
+        #gameShell {
+            position: fixed;
+            inset: 0;
+            background: #030712;
+            display: grid;
+            place-items: center;
         }
 
         canvas {
+            position: absolute;
             background: #0b0f1a;
             box-shadow:
                 0 0 0 6px #1d4ed8,
                 0 0 30px rgba(59, 130, 246, 0.35);
+            touch-action: none;
         }
 
         .hint {
@@ -37,17 +45,81 @@
             font-size: 14px;
             opacity: .8;
         }
+
+        .touch-controls {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: max(14px, env(safe-area-inset-bottom));
+            display: none;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding: 0 16px;
+            pointer-events: none;
+        }
+
+        .touch-cluster {
+            display: flex;
+            gap: 12px;
+            pointer-events: auto;
+        }
+
+        .touch-btn {
+            width: 68px;
+            height: 68px;
+            border-radius: 50%;
+            border: 2px solid rgba(191, 219, 254, 0.85);
+            background: rgba(30, 41, 59, 0.5);
+            color: #fff;
+            font-weight: 700;
+            font-size: 24px;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+
+        .touch-btn.fire {
+            width: 84px;
+            height: 84px;
+            font-size: 20px;
+        }
+
+        @media (pointer: coarse) {
+            .touch-controls {
+                display: flex;
+            }
+
+            .hint {
+                bottom: calc(112px + env(safe-area-inset-bottom));
+            }
+        }
     </style>
 </head>
 
 <body>
-    <canvas id="c" width="900" height="520"></canvas>
-    <div class="hint">Move: A/D or ←/→ · Fire: Space · P: Pause · M: Music · S: SFX</div>
+    <div id="gameShell">
+        <canvas id="c" width="900" height="520"></canvas>
+    </div>
+    <div class="hint">Move: A/D or ←/→ (or touch) · Fire: Space (or touch) · Q/E Loadout · P Pause · M Music · S SFX · R/C/G/T Accessibility</div>
+    <div class="touch-controls">
+        <div class="touch-cluster">
+            <button class="touch-btn" id="touchLeft" aria-label="Move left">◀</button>
+            <button class="touch-btn" id="touchRight" aria-label="Move right">▶</button>
+        </div>
+        <div class="touch-cluster">
+            <button class="touch-btn fire" id="touchFire" aria-label="Fire">FIRE</button>
+        </div>
+    </div>
 
     <script>
         (() => {
             const canvas = document.getElementById("c");
             const ctx = canvas.getContext("2d");
+            const touchButtons = {
+                left: document.getElementById("touchLeft"),
+                right: document.getElementById("touchRight"),
+                fire: document.getElementById("touchFire")
+            };
 
             const sounds = {
                 shoot: new Audio("sounds/shoot.wav"),
@@ -70,12 +142,15 @@
             }
 
             // --- constants ---
-            const W = canvas.width;
-            const H = canvas.height;
+            const WORLD_W = 900;
+            const WORLD_H = 520;
+            const W = WORLD_W;
+            const H = WORLD_H;
             const FLOOR_Y = H - 40;
             const GRAVITY = 980;
             const POP_DURATION = 0.28;
             const BORDER = 14;
+            const FIXED_DT = 1 / 120;
 
             const PLAYER = {
                 width: 34,
@@ -439,6 +514,94 @@
                         { x: 375, y: 215, w: 150, h: 16, type: "breakable" },
                         { x: 610, y: 260, w: 150, h: 16, type: "solid" }
                     ]
+                },
+                {
+                    name: "Wind Tunnel",
+                    bg: "sunset",
+                    challenge: "score_attack",
+                    balls: [
+                        { size: 1, x: 180, y: 110, dir: 1 },
+                        { size: 2, x: 450, y: 150, dir: -1 },
+                        { size: 1, x: 720, y: 110, dir: -1 }
+                    ],
+                    platforms: [
+                        { x: 220, y: 245, w: 180, h: 16, type: "solid", move: { axis: "x", amp: 80, speed: 1.1 } },
+                        { x: 500, y: 245, w: 180, h: 16, type: "solid", move: { axis: "x", amp: 80, speed: 1.1, phase: Math.PI } }
+                    ],
+                    modifiers: {
+                        wind: 34
+                    }
+                },
+                {
+                    name: "Hazard Circuit",
+                    bg: "night",
+                    challenge: "survive",
+                    balls: [
+                        { size: 2, x: 220, y: 110, dir: 1 },
+                        { size: 2, x: 680, y: 110, dir: -1 }
+                    ],
+                    platforms: [
+                        { x: 330, y: 210, w: 240, h: 16, type: "breakable" }
+                    ],
+                    modifiers: {
+                        hazards: [
+                            { x: 60, y: FLOOR_Y - 16, w: 180, h: 12 },
+                            { x: 660, y: FLOOR_Y - 16, w: 180, h: 12 }
+                        ]
+                    }
+                },
+                {
+                    name: "Ghost Gate",
+                    bg: "meadow",
+                    challenge: "no_powerups",
+                    balls: [
+                        { size: 1, x: 200, y: 100, dir: 1 },
+                        { size: 0, x: 450, y: 90, dir: -1 },
+                        { size: 1, x: 700, y: 100, dir: -1 }
+                    ],
+                    platforms: [
+                        { x: 260, y: 240, w: 140, h: 16, type: "solid", gate: { onRatio: 0.55, cycle: 3.2 } },
+                        { x: 500, y: 240, w: 140, h: 16, type: "solid", gate: { onRatio: 0.55, cycle: 3.2, phase: 1.6 } }
+                    ]
+                },
+                {
+                    name: "Storm Channels",
+                    bg: "sunset",
+                    challenge: "score_attack",
+                    balls: [
+                        { size: 0, x: 160, y: 90, dir: 1 },
+                        { size: 0, x: 740, y: 90, dir: -1 }
+                    ],
+                    platforms: [
+                        { x: 100, y: 280, w: 210, h: 16, type: "solid" },
+                        { x: 345, y: 220, w: 210, h: 16, type: "breakable", gate: { onRatio: 0.5, cycle: 2.6 } },
+                        { x: 590, y: 280, w: 210, h: 16, type: "solid" }
+                    ],
+                    modifiers: {
+                        wind: -42
+                    }
+                },
+                {
+                    name: "Final Relay",
+                    bg: "night",
+                    challenge: "survive",
+                    balls: [
+                        { size: 1, x: 160, y: 100, dir: 1 },
+                        { size: 2, x: 320, y: 150, dir: -1 },
+                        { size: 2, x: 580, y: 150, dir: 1 },
+                        { size: 1, x: 740, y: 100, dir: -1 }
+                    ],
+                    platforms: [
+                        { x: 120, y: 250, w: 150, h: 16, type: "solid", move: { axis: "y", amp: 45, speed: 1.2 } },
+                        { x: 380, y: 220, w: 140, h: 16, type: "breakable", gate: { onRatio: 0.48, cycle: 2.8 } },
+                        { x: 630, y: 250, w: 150, h: 16, type: "solid", move: { axis: "y", amp: 45, speed: 1.2, phase: Math.PI } }
+                    ],
+                    modifiers: {
+                        hazards: [
+                            { x: 260, y: FLOOR_Y - 16, w: 120, h: 12 },
+                            { x: 520, y: FLOOR_Y - 16, w: 120, h: 12 }
+                        ]
+                    }
                 }
             ];
 
@@ -455,6 +618,11 @@
 
             // --- input ---
             const pressedKeys = new Set();
+            const touchState = {
+                left: false,
+                right: false,
+                fire: false
+            };
             const actionState = {
                 left: false,
                 right: false,
@@ -535,6 +703,32 @@
                     return;
                 }
 
+                if (e.code === "KeyR") {
+                    reduceMotion = !reduceMotion;
+                    return;
+                }
+
+                if (e.code === "KeyC") {
+                    highContrastMode = !highContrastMode;
+                    return;
+                }
+
+                if (e.code === "KeyG") {
+                    aimAssist = !aimAssist;
+                    return;
+                }
+
+                if (e.code === "KeyT") {
+                    timerAssist = !timerAssist;
+                    return;
+                }
+
+                if (gameState === "startup" && (e.code === "KeyQ" || e.code === "KeyE")) {
+                    const delta = e.code === "KeyE" ? 1 : -1;
+                    selectedLoadoutIndex = (selectedLoadoutIndex + delta + LOADOUTS.length) % LOADOUTS.length;
+                    return;
+                }
+
                 if (isHandledKey(e.code)) e.preventDefault();
                 pressedKeys.add(e.code);
                 updateActionState();
@@ -552,9 +746,9 @@
             }
 
             function updateActionState() {
-                actionState.left = hasAnyKey(ACTION_KEYS.left);
-                actionState.right = hasAnyKey(ACTION_KEYS.right);
-                actionState.fire = hasAnyKey(ACTION_KEYS.fire);
+                actionState.left = hasAnyKey(ACTION_KEYS.left) || touchState.left;
+                actionState.right = hasAnyKey(ACTION_KEYS.right) || touchState.right;
+                actionState.fire = hasAnyKey(ACTION_KEYS.fire) || touchState.fire;
             }
 
             function hasAnyKey(keySet) {
@@ -573,6 +767,22 @@
 
                 updateActionState();
                 return true;
+            }
+
+            function bindTouchControl(button, key) {
+                if (!button) return;
+
+                const set = (value, event) => {
+                    event.preventDefault();
+                    touchState[key] = value;
+                    updateActionState();
+                };
+
+                button.addEventListener("pointerdown", event => set(true, event));
+                button.addEventListener("pointerup", event => set(false, event));
+                button.addEventListener("pointercancel", event => set(false, event));
+                button.addEventListener("pointerleave", event => set(false, event));
+                button.addEventListener("contextmenu", event => event.preventDefault());
             }
 
             // --- entities ---
@@ -605,12 +815,16 @@
             let harpoons = [];
             let scorePopups = [];
             let platforms = [];
+            let hazardStrips = [];
             let powerUps = [];
             let bullets = [];
             let highScores = [];
 
             let gameState = "startup";
             let startupBlinkTimer = 0;
+            let stageCardTimer = 1.5;
+            let comboCallout = "";
+            let comboCalloutTimer = 0;
             let score = 0;
             let comboTimer = 0;
             let comboCount = 0;
@@ -625,16 +839,29 @@
 
             let weaponType = "harpoon";
             let harpoonSpeed = 900;
+            let bulletCooldownFactor = 1;
             let bulletCooldown = 0;
 
             let flashTimer = 0;
             let shakeTimer = 0;
+            let shakeStrength = 0;
             let freezeTimer = 0;
+            let hitStopTimer = 0;
 
             let last = performance.now();
+            let accumulator = 0;
+            let simulationTime = 0;
             let musicMuted = false;
             let sfxMuted = false;
             let paused = false;
+            let reduceMotion = false;
+            let highContrastMode = false;
+            let aimAssist = false;
+            let timerAssist = false;
+            let levelWind = 0;
+            let challengeType = null;
+            let surviveTimer = 0;
+            let selectedLoadoutIndex = 0;
 
             let sessionToken = null;
             let enteringScore = false;
@@ -642,7 +869,61 @@
             let initialsIndex = 0;
             let scoreSubmitted = false;
 
+            const LOADOUTS = [
+                { name: "Balanced", playerSpeed: PLAYER.speed, harpoonSpeed: 900, cooldownFactor: 1 },
+                { name: "Rapid", playerSpeed: PLAYER.speed - 20, harpoonSpeed: 980, cooldownFactor: 0.78 },
+                { name: "Control", playerSpeed: PLAYER.speed + 25, harpoonSpeed: 820, cooldownFactor: 1.12 }
+            ];
+            const CHAPTERS = [
+                { upToLevel: 9, name: "Chapter 1 · Arcade Echoes" },
+                { upToLevel: 18, name: "Chapter 2 · Split Routes" },
+                { upToLevel: 27, name: "Chapter 3 · Remix Arena" },
+                { upToLevel: 32, name: "Chapter 4 · Hazard Run" }
+            ];
+
             // --- helpers ---
+
+            function resizeCanvasToViewport() {
+                const viewportW = Math.max(320, window.innerWidth);
+                const viewportH = Math.max(240, window.innerHeight);
+                const scale = Math.min(viewportW / W, viewportH / H);
+                const displayW = Math.max(1, Math.floor(W * scale));
+                const displayH = Math.max(1, Math.floor(H * scale));
+                const offsetX = Math.floor((viewportW - displayW) / 2);
+                const offsetY = Math.floor((viewportH - displayH) / 2);
+                const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+
+                canvas.style.width = `${displayW}px`;
+                canvas.style.height = `${displayH}px`;
+                canvas.style.left = `${offsetX}px`;
+                canvas.style.top = `${offsetY}px`;
+
+                canvas.width = Math.max(1, Math.floor(displayW * dpr));
+                canvas.height = Math.max(1, Math.floor(displayH * dpr));
+
+                ctx.setTransform((displayW / W) * dpr, 0, 0, (displayH / H) * dpr, 0, 0);
+            }
+
+            function triggerImpactFeedback({ flash = 0.12, shake = 0.16, strength = 8, hitStop = 0.025 } = {}) {
+                flashTimer = Math.max(flashTimer, flash);
+                shakeTimer = Math.max(shakeTimer, shake);
+                shakeStrength = Math.max(shakeStrength, strength);
+                hitStopTimer = Math.max(hitStopTimer, hitStop);
+            }
+
+            function getChapterName(index) {
+                for (const chapter of CHAPTERS) {
+                    if (index + 1 <= chapter.upToLevel) return chapter.name;
+                }
+                return CHAPTERS[CHAPTERS.length - 1].name;
+            }
+
+            function applySelectedLoadout() {
+                const loadout = LOADOUTS[selectedLoadoutIndex];
+                player.speed = loadout.playerSpeed;
+                harpoonSpeed = loadout.harpoonSpeed;
+                bulletCooldownFactor = loadout.cooldownFactor;
+            }
 
             async function loadHighScores() {
                 try {
@@ -716,8 +997,9 @@
             }
 
             function resetWeaponState() {
+                const loadout = LOADOUTS[selectedLoadoutIndex];
                 weaponType = "harpoon";
-                harpoonSpeed = 900;
+                harpoonSpeed = loadout.harpoonSpeed;
                 bulletCooldown = 0;
                 bullets = [];
                 harpoons = [];
@@ -727,6 +1009,8 @@
                 score = 0;
                 lives = 3;
                 levelIndex = 0;
+                simulationTime = 0;
+                applySelectedLoadout();
                 resetWeaponState();
                 freezeTimer = 0;
                 gameState = "playing";
@@ -737,6 +1021,8 @@
                 powerUps = [];
                 pops = [];
                 scorePopups = [];
+                comboCallout = "";
+                comboCalloutTimer = 0;
 
                 player.x = W * 0.5;
                 playerDead = false;
@@ -778,11 +1064,26 @@
                 currentMusicTrack.play();
             }
 
+            function preparePlatforms(platformList = []) {
+                return platformList.map(platform => ({
+                    ...platform,
+                    baseX: platform.x,
+                    baseY: platform.y,
+                    movePhase: platform.move?.phase ?? Math.random() * Math.PI * 2,
+                    active: true
+                }));
+            }
+
             function loadLevel(index) {
                 const level = LEVELS[index];
 
                 balls = level.balls.map(ball => createBall(ball.size, ball.x, ball.y, ball.dir));
-                platforms = (level.platforms || []).map(platform => ({ ...platform }));
+                platforms = preparePlatforms(level.platforms || []);
+                hazardStrips = (level.modifiers?.hazards || []).map(strip => ({ ...strip }));
+                levelWind = level.modifiers?.wind || 0;
+                challengeType = level.challenge ?? null;
+                surviveTimer = challengeType === "survive" ? 25 : 0;
+                stageCardTimer = 1.7;
 
                 playLevelMusic();
 
@@ -822,6 +1123,7 @@
             }
 
             function maybeSpawnPowerUp(x, y) {
+                if (challengeType === "no_powerups") return;
                 if (Math.random() > POWERUP.spawnChance) return;
 
                 const roll = Math.random();
@@ -857,6 +1159,17 @@
 
                 comboCount++;
                 comboTimer = COMBO_RESET_TIME;
+                if (comboCount >= 2) {
+                    comboCallout = `${comboCount}x COMBO`;
+                    comboCalloutTimer = 0.7;
+                }
+
+                triggerImpactFeedback({
+                    flash: 0.12,
+                    shake: 0.14,
+                    strength: 7 + Math.min(10, comboCount),
+                    hitStop: 0.02
+                });
 
                 playSound(sounds.pop);
                 spawnSparkBurst(ball.x, ball.y, 8, 2, 0.22, 340);
@@ -883,6 +1196,7 @@
                 if (playerDead) return;
 
                 playSound(sounds.death);
+                triggerImpactFeedback({ flash: 0.2, shake: 0.24, strength: 14, hitStop: 0.05 });
                 playerDead = true;
                 deathTimer = DEATH_TIME;
                 resetWeaponState();
@@ -892,6 +1206,8 @@
             function startLevelClear() {
                 levelClear = true;
                 levelClearTimer = LEVEL_CLEAR_TIME;
+                comboCallout = "WAVE CLEAR";
+                comboCalloutTimer = 1.4;
 
                 playSound(sounds.level);
 
@@ -917,7 +1233,7 @@
                         vy: BULLET.speedY
                     });
 
-                    bulletCooldown = BULLET.cooldown;
+                    bulletCooldown = BULLET.cooldown * bulletCooldownFactor;
                     return;
                 }
 
@@ -1011,58 +1327,67 @@
             // --- update ---
 
             function tick(now) {
-                const dt = Math.min(0.033, (now - last) / 1000);
+                const frameDt = Math.min(0.1, (now - last) / 1000);
                 last = now;
+                accumulator += frameDt;
 
-                updateTimers(dt);
-
-                if (gameState === "startup") {
-                    updateStartupState();
-                    draw();
-                    requestAnimationFrame(tick);
-                    return;
+                while (accumulator >= FIXED_DT) {
+                    if (hitStopTimer > 0) {
+                        updateTimers(FIXED_DT);
+                        hitStopTimer = Math.max(0, hitStopTimer - FIXED_DT);
+                    } else {
+                        simulateStep(FIXED_DT);
+                    }
+                    accumulator -= FIXED_DT;
                 }
-
-                if (gameState === "gameover") {
-                    updateGameOverState();
-                    draw();
-                    requestAnimationFrame(tick);
-                    return;
-                }
-
-                if (paused && gameState === "playing") {
-                    draw();
-                    requestAnimationFrame(tick);
-                    return;
-                }
-
-                if (playerDead) {
-                    updateDeathState(dt);
-                    draw();
-                    requestAnimationFrame(tick);
-                    return;
-                }
-
-                updateRoundState(dt);
-                updatePlayer(dt);
-                updateBalls(dt);
-                updatePlayerBallCollision();
-                updatePowerUps(dt);
-                updateBullets(dt);
-                updateHarpoons(dt);
-                updateEffects(dt);
 
                 draw();
                 requestAnimationFrame(tick);
             }
 
+            function simulateStep(dt) {
+                updateTimers(dt);
+                simulationTime += dt;
+
+                if (gameState === "startup") {
+                    updateStartupState();
+                    return;
+                }
+
+                if (gameState === "gameover") {
+                    updateGameOverState();
+                    return;
+                }
+
+                if (paused && gameState === "playing") return;
+
+                if (playerDead) {
+                    updateDeathState(dt);
+                    return;
+                }
+
+                updateRoundState(dt);
+                updatePlatforms(dt);
+                updatePlayer(dt);
+                updateBalls(dt);
+                updatePlayerBallCollision();
+                updateHazards(dt);
+                updatePowerUps(dt);
+                updateBullets(dt);
+                updateHarpoons(dt);
+                updateEffects(dt);
+            }
+
             function updateTimers(dt) {
                 flashTimer = Math.max(0, flashTimer - dt);
                 shakeTimer = Math.max(0, shakeTimer - dt);
+                stageCardTimer = Math.max(0, stageCardTimer - dt);
+                comboCalloutTimer = Math.max(0, comboCalloutTimer - dt);
                 comboTimer = Math.max(0, comboTimer - dt);
                 freezeTimer = Math.max(0, freezeTimer - dt);
                 bulletCooldown = Math.max(0, bulletCooldown - dt);
                 startupBlinkTimer += dt;
+                if (shakeTimer === 0) shakeStrength = 0;
 
                 if (comboTimer === 0) comboCount = 0;
             }
@@ -1095,7 +1420,9 @@
 
             function updateRoundState(dt) {
                 if (!levelClear && !playerDead) {
-                    timeLeft -= dt * TIME_DRAIN_PER_SECOND;
+                    const assistFactor = timerAssist ? 0.72 : 1;
+                    const challengeFactor = challengeType === "score_attack" ? 1.35 : 1;
+                    timeLeft -= dt * TIME_DRAIN_PER_SECOND * assistFactor * challengeFactor;
                     if (timeLeft <= 0) {
                         timeLeft = 0;
                         playerDead = true;
@@ -1107,6 +1434,13 @@
 
                 if (balls.length === 0 && !levelClear) {
                     startLevelClear();
+                }
+
+                if (challengeType === "survive" && !levelClear) {
+                    surviveTimer = Math.max(0, surviveTimer - dt);
+                    if (surviveTimer <= 0) {
+                        startLevelClear();
+                    }
                 }
 
                 if (levelClear) {
@@ -1125,7 +1459,7 @@
 
                 player.moving = dir !== 0;
                 if (dir !== 0) player.facing = dir;
-                player.vx = dir * player.speed;
+                player.vx = dir * player.speed + levelWind * 0.35;
                 player.x += player.vx * dt;
                 player.x = clamp(player.x, player.w / 2, W - player.w / 2);
 
@@ -1140,6 +1474,10 @@
                     const prevY = ball.y;
 
                     if (freezeTimer <= 0) {
+                        if (levelWind !== 0) {
+                            ball.vx += levelWind * dt;
+                            ball.vx = clamp(ball.vx, -260, 260);
+                        }
                         ball.vy += GRAVITY * dt;
                         ball.x += ball.vx * dt;
                         ball.y += ball.vy * dt;
@@ -1169,6 +1507,7 @@
 
             function handleBallPlatformBounce(ball, prevX, prevY) {
                 for (const platform of platforms) {
+                    if (platform.active === false) continue;
                     const hitHoriz = ball.x + ball.r > platform.x && ball.x - ball.r < platform.x + platform.w;
                     const hitVert = ball.y + ball.r > platform.y && ball.y - ball.r < platform.y + platform.h;
 
@@ -1201,6 +1540,44 @@
                     ball.y = FLOOR_Y - ball.r;
                     ball.vy = -BALL_BOUNCE_VY[ball.size];
                     ball.squash = 1;
+                }
+            }
+
+            function updatePlatforms(dt) {
+                if (gameState !== "playing") return;
+                const time = simulationTime;
+
+                for (const platform of platforms) {
+                    platform.x = platform.baseX;
+                    platform.y = platform.baseY;
+                    platform.active = true;
+
+                    if (platform.move) {
+                        const phase = (platform.movePhase || 0) + time * platform.move.speed;
+                        const offset = Math.sin(phase) * platform.move.amp;
+                        if (platform.move.axis === "x") platform.x = platform.baseX + offset;
+                        else platform.y = platform.baseY + offset;
+                    }
+
+                    if (platform.gate) {
+                        const phase = (time + (platform.gate.phase || 0)) % platform.gate.cycle;
+                        platform.active = phase <= platform.gate.cycle * platform.gate.onRatio;
+                    }
+                }
+            }
+
+            function updateHazards() {
+                if (playerDead || levelClear) return;
+
+                for (const strip of hazardStrips) {
+                    const active = Math.floor(simulationTime / 0.28) % 2 === 0;
+                    strip.active = active;
+                    if (!active) continue;
+
+                    if (pointInRect(player.x, player.y + PLAYER.collisionBottom - 2, strip.x, strip.y, strip.w, strip.h)) {
+                        killPlayer();
+                        return;
+                    }
                 }
             }
 
@@ -1257,8 +1634,7 @@
                     triggerBomb();
                     score += 200;
                     spawnScore(W / 2, H / 2, "BOMB!");
-                    flashTimer = 0.18;
-                    shakeTimer = 0.22;
+                    triggerImpactFeedback({ flash: 0.2, shake: 0.24, strength: 16, hitStop: 0.045 });
                     return;
                 }
 
@@ -1321,6 +1697,7 @@
             function handleBulletPlatformCollision(bulletIndex, bullet) {
                 for (let platformIndex = platforms.length - 1; platformIndex >= 0; platformIndex--) {
                     const platform = platforms[platformIndex];
+                    if (platform.active === false) continue;
                     if (!pointInRect(bullet.x, bullet.y, platform.x, platform.y, platform.w, platform.h)) continue;
 
                     if (platform.type === "breakable") {
@@ -1339,8 +1716,9 @@
                     const ball = balls[ballIndex];
                     const dx = ball.x - bullet.x;
                     const dy = ball.y - bullet.y;
+                    const assist = aimAssist ? 8 : 0;
 
-                    if ((dx * dx + dy * dy) < (ball.r * ball.r)) {
+                    if ((dx * dx + dy * dy) < ((ball.r + assist) * (ball.r + assist))) {
                         bullets.splice(bulletIndex, 1);
                         destroyBall(ballIndex);
                         return true;
@@ -1392,6 +1770,7 @@
             function handleHarpoonPlatformCollision(harpoonIndex, harpoon) {
                 for (let platformIndex = platforms.length - 1; platformIndex >= 0; platformIndex--) {
                     const platform = platforms[platformIndex];
+                    if (platform.active === false) continue;
                     const withinX = harpoon.x >= platform.x && harpoon.x <= platform.x + platform.w;
                     const withinY = harpoon.yTop <= platform.y + platform.h && harpoon.yBottom >= platform.y;
 
@@ -1411,8 +1790,9 @@
             function handleHarpoonBallCollision(harpoonIndex, harpoon) {
                 for (let ballIndex = 0; ballIndex < balls.length; ballIndex++) {
                     const ball = balls[ballIndex];
-
-                    if (circleHitsVerticalLine(ball, harpoon.x, harpoon.yTop)) {
+                    const assist = aimAssist ? 6 : 0;
+                    const hits = Math.abs(ball.x - harpoon.x) < (ball.r + assist) && (ball.y + ball.r) > harpoon.yTop;
+                    if (hits) {
                         harpoons.splice(harpoonIndex, 1);
                         destroyBall(ballIndex);
                         return true;
@@ -1456,6 +1836,7 @@
                 applyScreenShake();
                 drawBackground();
                 drawFloor();
+                drawHazards();
                 drawPlatforms();
                 drawPlayer();
                 drawPlayerDeathMarker();
@@ -1467,6 +1848,8 @@
                 drawScorePopups();
                 drawLevelClear();
                 drawPowerUps();
+                drawComboCallout();
+                drawStageCard();
                 drawHud();
                 drawLives();
                 drawScreens();
@@ -1570,9 +1953,10 @@
                 let shakeX = 0;
                 let shakeY = 0;
 
-                if (shakeTimer > 0) {
-                    shakeX = (Math.random() - 0.5) * 8;
-                    shakeY = (Math.random() - 0.5) * 8;
+                if (shakeTimer > 0 && !reduceMotion) {
+                    const amplitude = Math.max(2, shakeStrength);
+                    shakeX = (Math.random() - 0.5) * amplitude;
+                    shakeY = (Math.random() - 0.5) * amplitude;
                 }
 
                 ctx.translate(shakeX, shakeY);
@@ -1580,6 +1964,13 @@
 
             function drawBackground() {
                 const bg = LEVELS[levelIndex].bg;
+                if (highContrastMode) {
+                    ctx.fillStyle = "#0f172a";
+                    ctx.fillRect(0, 0, W, FLOOR_Y);
+                    ctx.fillStyle = "#1e3a8a";
+                    ctx.fillRect(0, FLOOR_Y - 30, W, 30);
+                    return;
+                }
 
                 if (bg === "meadow") {
                     ctx.fillStyle = "#38bdf8";
@@ -1682,6 +2073,18 @@
                 }
             }
 
+            function drawHazards() {
+                for (const strip of hazardStrips) {
+                    const active = strip.active !== false;
+                    ctx.fillStyle = active ? "rgba(239,68,68,0.85)" : "rgba(239,68,68,0.25)";
+                    ctx.fillRect(strip.x, strip.y, strip.w, strip.h);
+
+                    ctx.strokeStyle = active ? "#fecaca" : "rgba(254,202,202,0.4)";
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(strip.x, strip.y, strip.w, strip.h);
+                }
+            }
+
             function drawScreens() {
                 if (paused && gameState === "playing") {
                     ctx.fillStyle = "rgba(0,0,0,0.45)";
@@ -1717,9 +2120,11 @@
                     ctx.font = "24px system-ui, sans-serif";
                     ctx.fillText("Move: A / D or Arrow Keys", W / 2, 210);
                     ctx.fillText("Fire: Space", W / 2, 240);
+                    ctx.fillText(`Loadout: ${LOADOUTS[selectedLoadoutIndex].name}`, W / 2, 270);
 
                     ctx.fillStyle = "#93c5fd";
                     ctx.font = "18px system-ui, sans-serif";
+                    ctx.fillText("Q / E to switch loadout", W / 2, 295);
 
                     if (Math.floor(startupBlinkTimer * 2) % 2 === 0) {
                         ctx.fillStyle = "#ffffff";
@@ -1850,6 +2255,16 @@
 
             function drawPlatforms() {
                 for (const platform of platforms) {
+                    if (platform.active === false) {
+                        ctx.save();
+                        ctx.globalAlpha = 0.25;
+                        ctx.strokeStyle = "#cbd5e1";
+                        ctx.lineWidth = 2;
+                        ctx.setLineDash([8, 6]);
+                        ctx.strokeRect(platform.x, platform.y, platform.w, platform.h);
+                        ctx.restore();
+                        continue;
+                    }
                     const isSolid = platform.type === "solid";
                     const fill = isSolid ? "#3b82f6" : "#f59e0b";
                     const top = isSolid ? "#93c5fd" : "#fde68a";
@@ -2129,6 +2544,49 @@
                 ctx.textAlign = "left";
             }
 
+            function drawComboCallout() {
+                if (comboCalloutTimer <= 0) return;
+                const alpha = Math.min(1, comboCalloutTimer / 0.7);
+                ctx.fillStyle = `rgba(253, 224, 71, ${alpha})`;
+                ctx.font = "bold 28px system-ui, sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText(comboCallout, W / 2, H * 0.36);
+                ctx.textAlign = "left";
+            }
+
+            function drawStageCard() {
+                if (stageCardTimer <= 0 || gameState !== "playing" || levelClear) return;
+                const alpha = Math.min(1, stageCardTimer / 0.45);
+                const level = LEVELS[levelIndex];
+                const challengeLabels = {
+                    score_attack: "Score Attack",
+                    survive: "Survive Wave",
+                    no_powerups: "No Powerups"
+                };
+                const chapter = getChapterName(levelIndex);
+
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.fillStyle = "rgba(2, 6, 23, 0.55)";
+                ctx.fillRect(W / 2 - 220, 70, 440, 84);
+                ctx.strokeStyle = "#93c5fd";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(W / 2 - 220, 70, 440, 84);
+
+                ctx.textAlign = "center";
+                ctx.fillStyle = "#fde68a";
+                ctx.font = "bold 30px system-ui, sans-serif";
+                ctx.fillText(`Wave ${levelIndex + 1}: ${level.name}`, W / 2, 106);
+
+                ctx.fillStyle = "#cbd5e1";
+                ctx.font = "bold 16px system-ui, sans-serif";
+                const windText = levelWind === 0 ? "" : ` · Wind ${levelWind > 0 ? "→" : "←"}`;
+                const challengeText = challengeType ? challengeLabels[challengeType] : "Standard";
+                ctx.fillText(`${chapter} · ${challengeText}${windText}`, W / 2, 132);
+                ctx.restore();
+                ctx.textAlign = "left";
+            }
+
             function drawPowerUps() {
                 for (const powerUp of powerUps) {
                     if (powerUp.life < 3) {
@@ -2138,6 +2596,10 @@
 
                     ctx.save();
                     ctx.translate(powerUp.x, powerUp.y + Math.sin(powerUp.anim || 0) * 2);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 26, 0, Math.PI * 2);
+                    ctx.fillStyle = "rgba(255,255,255,0.08)";
+                    ctx.fill();
 
                     if (powerUp.type === "twin") {
                         drawTwinPowerUp();
@@ -2148,6 +2610,11 @@
                     } else if (powerUp.type === "bomb") {
                         drawBombPowerUp();
                     }
+
+                    ctx.fillStyle = "#e2e8f0";
+                    ctx.font = "bold 11px system-ui, sans-serif";
+                    ctx.textAlign = "center";
+                    ctx.fillText(powerUp.type.toUpperCase(), 0, 34);
 
                     ctx.restore();
                 }
@@ -2331,18 +2798,23 @@
                     ctx.fillText(value, x + 78, yy);
                 }
 
-                row(0, "SCORE", String(score), "#fde047");
-                row(1, "LEVEL", LEVELS[levelIndex].name);
+                let rowIndex = 0;
+                row(rowIndex++, "SCORE", String(score), "#fde047");
+                row(rowIndex++, "LEVEL", LEVELS[levelIndex].name);
+                row(rowIndex++, "CHAPTER", getChapterName(levelIndex).split("·")[1].trim(), "#93c5fd");
+                if (challengeType === "survive") {
+                    row(rowIndex++, "SURVIVE", `${surviveTimer.toFixed(1)}s`, "#67e8f9");
+                }
 
                 {
                     let timeColor = "#86efac";
                     if (timeLeft <= 20) timeColor = "#fbbf24";
                     if (timeLeft <= 10) timeColor = "#fb7185";
-                    row(2, "TIME", String(Math.ceil(timeLeft)), timeColor);
+                    row(rowIndex++, "TIME", String(Math.ceil(timeLeft)), timeColor);
                 }
 
                 {
-                    const yy = y + gap * 3;
+                    const yy = y + gap * rowIndex;
 
                     ctx.font = "bold 12px system-ui, sans-serif";
                     ctx.fillStyle = labelColor;
@@ -2368,7 +2840,7 @@
                 if (freezeTimer > 0) {
                     const shouldDraw = freezeTimer >= 2 || Math.floor(freezeTimer * 10) % 2 === 0;
                     if (shouldDraw) {
-                        const yy = y + gap * 4.1;
+                        const yy = y + gap * (rowIndex + 1.1);
 
                         ctx.font = "bold 12px system-ui, sans-serif";
                         ctx.fillStyle = labelColor;
@@ -2452,7 +2924,7 @@
             function drawAudioStatus() {
                 if (gameState !== "playing") return;
 
-                const text = `P Pause   M Music ${musicMuted ? "Off" : "On"}   S SFX ${sfxMuted ? "Off" : "On"}`;
+                const text = `P Pause · M Music ${musicMuted ? "Off" : "On"} · S SFX ${sfxMuted ? "Off" : "On"} · R Shake ${reduceMotion ? "Reduced" : "Full"} · C Contrast ${highContrastMode ? "High" : "Normal"} · G Aim ${aimAssist ? "Assist" : "Normal"} · T Timer ${timerAssist ? "Assist" : "Normal"}`;
 
                 ctx.save();
                 ctx.font = "bold 12px system-ui, sans-serif";
@@ -2490,6 +2962,14 @@
                 ctx.fillText("© Gelder Arcade Systems", W / 2, H);
                 ctx.restore();
             }
+
+            bindTouchControl(touchButtons.left, "left");
+            bindTouchControl(touchButtons.right, "right");
+            bindTouchControl(touchButtons.fire, "fire");
+
+            addEventListener("resize", resizeCanvasToViewport);
+            addEventListener("orientationchange", resizeCanvasToViewport);
+            resizeCanvasToViewport();
 
             (async () => {
                 await loadHighScores();
