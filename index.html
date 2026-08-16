@@ -150,7 +150,7 @@
             const GRAVITY = 980;
             const POP_DURATION = 0.28;
             const BORDER = 14;
-            const FIXED_DT = 1 / 120;
+            const FIXED_DT = 1 / 60;
 
             const PLAYER = {
                 width: 34,
@@ -2980,6 +2980,7 @@
 
             addEventListener("resize", resizeCanvasToViewport);
             addEventListener("orientationchange", resizeCanvasToViewport);
+            document.addEventListener("visibilitychange", () => { if (!document.hidden) last = performance.now(); });
             resizeCanvasToViewport();
 
             (async () => {
