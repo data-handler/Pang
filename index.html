@@ -35,6 +35,7 @@
                 0 0 0 6px #1d4ed8,
                 0 0 30px rgba(59, 130, 246, 0.35);
             touch-action: none;
+            will-change: transform;
         }
 
         .hint {
@@ -154,7 +155,7 @@
             const GRAVITY = 980;
             const POP_DURATION = 0.28;
             const BORDER = 14;
-            const FIXED_DT = isTouchDevice ? 1 / 60 : 1 / 120;
+            const FIXED_DT = 1 / 120;
             const MAX_CANVAS_DPR = isTouchDevice ? 1.5 : 3;
 
             const PLAYER = {
@@ -2536,8 +2537,10 @@
                     ctx.translate(bx, by);
                     ctx.scale(squashX, squashY);
 
-                    ctx.shadowBlur = 32;
-                    ctx.shadowColor = "rgba(255, 170, 230, 0.45)";
+                    if (!isTouchDevice) {
+                        ctx.shadowBlur = 32;
+                        ctx.shadowColor = "rgba(255, 170, 230, 0.45)";
+                    }
                     ctx.beginPath();
                     ctx.arc(0, 0, ball.r, 0, Math.PI * 2);
                     ctx.fillStyle = "rgba(244, 114, 182, 0.20)";
