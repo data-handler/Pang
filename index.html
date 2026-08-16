@@ -150,7 +150,7 @@
             const GRAVITY = 980;
             const POP_DURATION = 0.28;
             const BORDER = 14;
-            const FIXED_DT = 1 / 60;
+            const FIXED_DT = 1 / 120;
 
             const PLAYER = {
                 width: 34,
@@ -1172,7 +1172,7 @@
                 balls.push(createBall(nextSize, ball.x + 8, ball.y - 4, 1, kick));
             }
 
-            function destroyBall(ballIndex) {
+            function destroyBall(ballIndex, skipHitStop = false) {
                 const ball = balls[ballIndex];
 
                 comboCount++;
@@ -1186,7 +1186,7 @@
                     flash: 0.12,
                     shake: 0.14,
                     strength: 7 + Math.min(10, comboCount),
-                    hitStop: 0.02
+                    hitStop: skipHitStop ? 0 : 0.02
                 });
 
                 playSound(sounds.pop);
@@ -1767,7 +1767,7 @@
 
                     if ((dx * dx + dy * dy) < ((ball.r + assist) * (ball.r + assist))) {
                         bullets.splice(bulletIndex, 1);
-                        destroyBall(ballIndex);
+                        destroyBall(ballIndex, true);
                         return true;
                     }
                 }
@@ -2002,8 +2002,9 @@
 
                 if (shakeTimer > 0 && !reduceMotion) {
                     const amplitude = Math.max(2, shakeStrength);
-                    shakeX = (Math.random() - 0.5) * amplitude;
-                    shakeY = (Math.random() - 0.5) * amplitude;
+                    const t = performance.now() * 0.001;
+                    shakeX = Math.sin(t * 97.3) * amplitude * (shakeTimer / 0.16);
+                    shakeY = Math.sin(t * 79.1 + 1.7) * amplitude * (shakeTimer / 0.16);
                 }
 
                 ctx.translate(shakeX, shakeY);
