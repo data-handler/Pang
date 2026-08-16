@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>Pang (starter)</title>
     <style>
         html,
@@ -13,6 +13,7 @@
             background: #111;
             color: #ddd;
             font-family: system-ui, sans-serif;
+            touch-action: manipulation;
         }
 
         body {
@@ -120,6 +121,9 @@
                 right: document.getElementById("touchRight"),
                 fire: document.getElementById("touchFire")
             };
+            const isTouchDevice = window.matchMedia("(pointer: coarse)").matches || (navigator.maxTouchPoints || 0) > 0;
+            const startupActionText = isTouchDevice ? "TAP FIRE TO START" : "PRESS SPACE TO START";
+            const restartActionText = isTouchDevice ? "Tap FIRE to Restart" : "Press Space to Restart";
 
             const sounds = {
                 shoot: new Audio("sounds/shoot.wav"),
@@ -858,8 +862,7 @@
             let musicMuted = false;
             let sfxMuted = false;
             let paused = false;
-            const isTouchDevice = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
-            let reduceMotion = isTouchDevice;
+            let reduceMotion = isTouchDevice || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
             let highContrastMode = false;
             let aimAssist = false;
             let timerAssist = false;
@@ -910,12 +913,16 @@
             }
 
             function triggerImpactFeedback({ flash = 0.12, shake = 0.16, strength = 8, hitStop = 0.025 } = {}) {
-                flashTimer = Math.max(flashTimer, flash);
-                if (!reduceMotion) {
-                    shakeTimer = Math.max(shakeTimer, shake);
-                    shakeStrength = Math.max(shakeStrength, strength);
-                    hitStopTimer = Math.max(hitStopTimer, hitStop);
+                if (reduceMotion) {
+                    flash = Math.min(flash, 0.05);
+                    shake = 0;
+                    strength = 0;
+                    hitStop = 0;
                 }
+                flashTimer = Math.max(flashTimer, flash);
+                shakeTimer = Math.max(shakeTimer, shake);
+                shakeStrength = Math.max(shakeStrength, strength);
+                hitStopTimer = Math.max(hitStopTimer, hitStop);
             }
 
             function getChapterName(index) {
@@ -1004,7 +1011,10 @@
             function playSound(sound) {
                 if (sfxMuted) return;
                 sound.currentTime = 0;
-                sound.play();
+                const playAttempt = sound.play();
+                if (playAttempt && typeof playAttempt.catch === "function") {
+                    playAttempt.catch(() => { });
+                }
             }
 
             function resetWeaponState() {
@@ -2166,8 +2176,8 @@
 
                     ctx.fillStyle = "#cbd5e1";
                     ctx.font = "24px system-ui, sans-serif";
-                    ctx.fillText("Move: A / D or Arrow Keys", W / 2, 210);
-                    ctx.fillText("Fire: Space", W / 2, 240);
+                    ctx.fillText("Move: A / D, Arrow Keys, or Touch", W / 2, 210);
+                    ctx.fillText("Fire: Space or FIRE button", W / 2, 240);
                     ctx.fillText(`Loadout: ${LOADOUTS[selectedLoadoutIndex].name}`, W / 2, 270);
 
                     ctx.fillStyle = "#93c5fd";
@@ -2177,7 +2187,7 @@
                     if (Math.floor(startupBlinkTimer * 2) % 2 === 0) {
                         ctx.fillStyle = "#ffffff";
                         ctx.font = "bold 28px system-ui, sans-serif";
-                        ctx.fillText("PRESS SPACE TO START", W / 2, 320);
+                        ctx.fillText(startupActionText, W / 2, 320);
                     }
 
                     drawTopScores(W / 2, 355);
@@ -2206,7 +2216,7 @@
 
                         ctx.font = "22px system-ui, sans-serif";
                         ctx.fillStyle = "#ffffff";
-                        ctx.fillText("Press Space to Restart", W / 2, H - 28);
+                        ctx.fillText(restartActionText, W / 2, H - 28);
                     }
 
                     ctx.textAlign = "left";
@@ -3026,13 +3036,38 @@
             bindTouchControl(touchButtons.right, "right");
             bindTouchControl(touchButtons.fire, "fire");
 
-            // Block double-tap zoom on touch devices
-            let lastTapTime = 0;
-            document.addEventListener("touchstart", (e) => {
-                const now = Date.now();
-                if (now - lastTapTime < 300) e.preventDefault();
-                lastTapTime = now;
-            }, { passive: false });
+            let lastTouchStart = 0;
+            addEventListener("touchstart", (event) => {
+                if (!event.cancelable || event.touches.length !== 1) return;
+                const now = performance.now();
+                if (now - lastTouchStart < 350) {
+                    event.preventDefault();
+                }
+                lastTouchStart = now;
+            }, { passive: false, capture: true });
+
+            addEventListener("touchmove", (event) => {
+                if (!event.cancelable) return;
+                if (event.touches.length > 1) {
+                    event.preventDefault();
+                }
+            }, { passive: false, capture: true });
+
+            addEventListener("gesturestart", (event) => {
+                if (event.cancelable) event.preventDefault();
+            }, { passive: false, capture: true });
+
+            addEventListener("gesturechange", (event) => {
+                if (event.cancelable) event.preventDefault();
+            }, { passive: false, capture: true });
+
+            addEventListener("gestureend", (event) => {
+                if (event.cancelable) event.preventDefault();
+            }, { passive: false, capture: true });
+
+            addEventListener("dblclick", (event) => {
+                if (event.cancelable) event.preventDefault();
+            }, { capture: true });
 
             addEventListener("resize", resizeCanvasToViewport);
             addEventListener("orientationchange", resizeCanvasToViewport);
