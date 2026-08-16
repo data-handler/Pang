@@ -156,7 +156,7 @@
             const POP_DURATION = 0.28;
             const BORDER = 14;
             const FIXED_DT = 1 / 120;
-            const MAX_CANVAS_DPR = isTouchDevice ? 1.5 : 3;
+            const MAX_CANVAS_DPR = isTouchDevice ? 1.5 : 2;
 
             const PLAYER = {
                 width: 34,
@@ -716,6 +716,7 @@
 
                 if (e.code === "KeyC") {
                     highContrastMode = !highContrastMode;
+                    rebuildBgCache();
                     return;
                 }
 
@@ -873,6 +874,8 @@
             let shakeStrength = 0;
             let freezeTimer = 0;
             let hitStopTimer = 0;
+
+            let bgCache = null;
 
             let last = performance.now();
             let accumulator = 0;
@@ -1128,6 +1131,7 @@
 
                 playLevelMusic();
 
+                rebuildBgCache();
                 resetLevelState();
             }
 
@@ -1910,8 +1914,12 @@
                 ctx.save();
 
                 applyScreenShake();
-                drawBackground();
-                drawFloor();
+                if (bgCache) {
+                    ctx.drawImage(bgCache, 0, 0, W, H);
+                } else {
+                    drawBackground();
+                    drawFloor();
+                }
                 drawHazards();
                 drawPlatforms();
                 drawPlayer();
@@ -2039,100 +2047,110 @@
                 ctx.translate(shakeX, shakeY);
             }
 
-            function drawBackground() {
+            function rebuildBgCache() {
+                const oc = document.createElement("canvas");
+                oc.width = W;
+                oc.height = H;
+                const oc_ctx = oc.getContext("2d");
+                drawBackground(oc_ctx);
+                drawFloor(oc_ctx);
+                bgCache = oc;
+            }
+
+            function drawBackground(c = ctx) {
                 const bg = LEVELS[levelIndex].bg;
                 if (highContrastMode) {
-                    ctx.fillStyle = "#0f172a";
-                    ctx.fillRect(0, 0, W, FLOOR_Y);
-                    ctx.fillStyle = "#1e3a8a";
-                    ctx.fillRect(0, FLOOR_Y - 30, W, 30);
+                    c.fillStyle = "#0f172a";
+                    c.fillRect(0, 0, W, FLOOR_Y);
+                    c.fillStyle = "#1e3a8a";
+                    c.fillRect(0, FLOOR_Y - 30, W, 30);
                     return;
                 }
 
                 if (bg === "meadow") {
-                    ctx.fillStyle = "#38bdf8";
-                    ctx.fillRect(0, 0, W, FLOOR_Y);
+                    c.fillStyle = "#38bdf8";
+                    c.fillRect(0, 0, W, FLOOR_Y);
 
-                    ctx.fillStyle = "#65a30d";
-                    ctx.beginPath();
-                    ctx.moveTo(0, FLOOR_Y - 90);
-                    ctx.quadraticCurveTo(140, FLOOR_Y - 150, 300, FLOOR_Y - 95);
-                    ctx.quadraticCurveTo(440, FLOOR_Y - 140, 620, FLOOR_Y - 100);
-                    ctx.quadraticCurveTo(760, FLOOR_Y - 130, W, FLOOR_Y - 85);
-                    ctx.lineTo(W, FLOOR_Y);
-                    ctx.lineTo(0, FLOOR_Y);
-                    ctx.closePath();
-                    ctx.fill();
+                    c.fillStyle = "#65a30d";
+                    c.beginPath();
+                    c.moveTo(0, FLOOR_Y - 90);
+                    c.quadraticCurveTo(140, FLOOR_Y - 150, 300, FLOOR_Y - 95);
+                    c.quadraticCurveTo(440, FLOOR_Y - 140, 620, FLOOR_Y - 100);
+                    c.quadraticCurveTo(760, FLOOR_Y - 130, W, FLOOR_Y - 85);
+                    c.lineTo(W, FLOOR_Y);
+                    c.lineTo(0, FLOOR_Y);
+                    c.closePath();
+                    c.fill();
 
-                    ctx.fillStyle = "#84cc16";
-                    ctx.fillRect(0, FLOOR_Y - 35, W, 35);
+                    c.fillStyle = "#84cc16";
+                    c.fillRect(0, FLOOR_Y - 35, W, 35);
                     return;
                 }
 
                 if (bg === "sunset") {
-                    const grad = ctx.createLinearGradient(0, 0, 0, FLOOR_Y);
+                    const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
                     grad.addColorStop(0, "#f97316");
                     grad.addColorStop(0.45, "#fb7185");
                     grad.addColorStop(1, "#7c3aed");
-                    ctx.fillStyle = grad;
-                    ctx.fillRect(0, 0, W, FLOOR_Y);
+                    c.fillStyle = grad;
+                    c.fillRect(0, 0, W, FLOOR_Y);
 
-                    ctx.beginPath();
-                    ctx.arc(W - 140, 100, 45, 0, Math.PI * 2);
-                    ctx.fillStyle = "rgba(255,255,180,0.75)";
-                    ctx.fill();
+                    c.beginPath();
+                    c.arc(W - 140, 100, 45, 0, Math.PI * 2);
+                    c.fillStyle = "rgba(255,255,180,0.75)";
+                    c.fill();
 
-                    ctx.fillStyle = "#334155";
-                    ctx.beginPath();
-                    ctx.moveTo(80, FLOOR_Y);
-                    ctx.lineTo(260, FLOOR_Y - 180);
-                    ctx.lineTo(430, FLOOR_Y);
-                    ctx.closePath();
-                    ctx.fill();
+                    c.fillStyle = "#334155";
+                    c.beginPath();
+                    c.moveTo(80, FLOOR_Y);
+                    c.lineTo(260, FLOOR_Y - 180);
+                    c.lineTo(430, FLOOR_Y);
+                    c.closePath();
+                    c.fill();
 
-                    ctx.beginPath();
-                    ctx.moveTo(320, FLOOR_Y);
-                    ctx.lineTo(560, FLOOR_Y - 140);
-                    ctx.lineTo(760, FLOOR_Y);
-                    ctx.closePath();
-                    ctx.fill();
+                    c.beginPath();
+                    c.moveTo(320, FLOOR_Y);
+                    c.lineTo(560, FLOOR_Y - 140);
+                    c.lineTo(760, FLOOR_Y);
+                    c.closePath();
+                    c.fill();
 
-                    ctx.fillStyle = "#166534";
-                    ctx.fillRect(0, FLOOR_Y - 28, W, 28);
+                    c.fillStyle = "#166534";
+                    c.fillRect(0, FLOOR_Y - 28, W, 28);
                     return;
                 }
 
                 if (bg === "night") {
-                    const grad = ctx.createLinearGradient(0, 0, 0, FLOOR_Y);
+                    const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
                     grad.addColorStop(0, "#020617");
                     grad.addColorStop(1, "#0f172a");
-                    ctx.fillStyle = grad;
-                    ctx.fillRect(0, 0, W, FLOOR_Y);
+                    c.fillStyle = grad;
+                    c.fillRect(0, 0, W, FLOOR_Y);
 
-                    ctx.beginPath();
-                    ctx.arc(W - 120, 90, 30, 0, Math.PI * 2);
-                    ctx.fillStyle = "#e2e8f0";
-                    ctx.fill();
+                    c.beginPath();
+                    c.arc(W - 120, 90, 30, 0, Math.PI * 2);
+                    c.fillStyle = "#e2e8f0";
+                    c.fill();
 
-                    ctx.fillStyle = "rgba(255,255,255,0.8)";
+                    c.fillStyle = "rgba(255,255,255,0.8)";
                     for (const [x, y] of BACKGROUND_NIGHT_STARS) {
-                        ctx.fillRect(x, y, 2, 2);
+                        c.fillRect(x, y, 2, 2);
                     }
 
-                    ctx.fillStyle = "#1e293b";
-                    ctx.fillRect(0, FLOOR_Y - 55, W, 55);
+                    c.fillStyle = "#1e293b";
+                    c.fillRect(0, FLOOR_Y - 55, W, 55);
 
-                    ctx.fillStyle = "#0f172a";
+                    c.fillStyle = "#0f172a";
                     for (let i = 0; i < W; i += 60) {
                         const h = 20 + (i % 120 === 0 ? 45 : 30);
-                        ctx.fillRect(i, FLOOR_Y - h, 36, h);
+                        c.fillRect(i, FLOOR_Y - h, 36, h);
                     }
                 }
             }
 
-            function drawFloor() {
-                ctx.fillStyle = "#2563eb";
-                ctx.fillRect(0, FLOOR_Y, W, H - FLOOR_Y);
+            function drawFloor(c = ctx) {
+                c.fillStyle = "#2563eb";
+                c.fillRect(0, FLOOR_Y, W, H - FLOOR_Y);
 
                 const brickW = 28;
                 const brickH = 10;
@@ -2143,9 +2161,9 @@
                         const x = col * brickW - offset;
                         const y = FLOOR_Y + row * brickH;
 
-                        ctx.strokeStyle = "#93c5fd";
-                        ctx.lineWidth = 1;
-                        ctx.strokeRect(x, y, brickW, brickH);
+                        c.strokeStyle = "#93c5fd";
+                        c.lineWidth = 1;
+                        c.strokeRect(x, y, brickW, brickH);
                     }
                 }
             }
@@ -2538,7 +2556,7 @@
                     ctx.scale(squashX, squashY);
 
                     if (!isTouchDevice) {
-                        ctx.shadowBlur = 32;
+                        ctx.shadowBlur = 16;
                         ctx.shadowColor = "rgba(255, 170, 230, 0.45)";
                     }
                     ctx.beginPath();
@@ -3094,6 +3112,7 @@
             addEventListener("orientationchange", resizeCanvasToViewport);
             document.addEventListener("visibilitychange", () => { if (!document.hidden) last = performance.now(); });
             resizeCanvasToViewport();
+            rebuildBgCache();
 
             (async () => {
                 await loadHighScores();
