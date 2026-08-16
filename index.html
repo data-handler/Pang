@@ -155,7 +155,8 @@
             const GRAVITY = 980;
             const POP_DURATION = 0.28;
             const BORDER = 14;
-            const FIXED_DT = 1 / 120;
+            const FIXED_DT = isTouchDevice ? 1 / 60 : 1 / 120;
+            const MAX_STEPS_PER_FRAME = isTouchDevice ? 2 : 5;
             const MAX_CANVAS_DPR = isTouchDevice ? 1.5 : 2;
 
             const PLAYER = {
@@ -1385,7 +1386,8 @@
                 last = now;
                 accumulator += frameDt;
 
-                while (accumulator >= FIXED_DT) {
+                let steps = 0;
+                while (accumulator >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
                     savePrevPositions();
                     if (hitStopTimer > 0) {
                         updateTimers(FIXED_DT);
@@ -1394,6 +1396,11 @@
                         simulateStep(FIXED_DT);
                     }
                     accumulator -= FIXED_DT;
+                    steps++;
+                }
+
+                if (accumulator >= FIXED_DT) {
+                    accumulator = Math.min(accumulator, FIXED_DT);
                 }
 
                 renderAlpha = accumulator / FIXED_DT;
@@ -2039,7 +2046,7 @@
 
                 if (shakeTimer > 0 && !reduceMotion) {
                     const amplitude = Math.max(2, shakeStrength);
-                    const t = performance.now() * 0.001;
+                    const t = simulationTime;
                     shakeX = Math.sin(t * 97.3) * amplitude * (shakeTimer / 0.16);
                     shakeY = Math.sin(t * 79.1 + 1.7) * amplitude * (shakeTimer / 0.16);
                 }
@@ -3110,7 +3117,12 @@
 
             addEventListener("resize", resizeCanvasToViewport);
             addEventListener("orientationchange", resizeCanvasToViewport);
-            document.addEventListener("visibilitychange", () => { if (!document.hidden) last = performance.now(); });
+            document.addEventListener("visibilitychange", () => {
+                if (!document.hidden) {
+                    last = performance.now();
+                    accumulator = 0;
+                }
+            });
             resizeCanvasToViewport();
             rebuildBgCache();
 
