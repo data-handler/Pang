@@ -155,9 +155,11 @@
             const GRAVITY = 980;
             const POP_DURATION = 0.28;
             const BORDER = 14;
-            const FIXED_DT = isTouchDevice ? 1 / 60 : 1 / 120;
-            const MAX_STEPS_PER_FRAME = isTouchDevice ? 2 : 5;
-            const MAX_CANVAS_DPR = isTouchDevice ? 1.5 : 2;
+            const FIXED_DT = 1 / 120;
+            const MAX_STEPS_PER_FRAME = 5;
+            // URL flag ?dpr=1 forces canvas DPR to 1 for rendering-resolution testing
+            const _urlDpr = parseFloat(new URLSearchParams(location.search).get("dpr"));
+            const MAX_CANVAS_DPR = (_urlDpr > 0 ? _urlDpr : (isTouchDevice ? 1.5 : 2));
 
             const PLAYER = {
                 width: 34,
@@ -882,8 +884,10 @@
             let accumulator = 0;
             let renderAlpha = 1;
             let simulationTime = 0;
-            let musicMuted = false;
-            let sfxMuted = false;
+            // URL flag ?audio=off disables all audio for iOS stall testing
+            const _audioDisabled = new URLSearchParams(location.search).get("audio") === "off";
+            let musicMuted = _audioDisabled;
+            let sfxMuted = _audioDisabled;
             let paused = false;
             let reduceMotion = isTouchDevice || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
             let highContrastMode = false;
@@ -1399,8 +1403,10 @@
                     steps++;
                 }
 
+                // Allow up to 2 steps of leftover time so a single late frame
+                // doesn't discard simulation time and cause a visible hitch.
                 if (accumulator >= FIXED_DT) {
-                    accumulator = Math.min(accumulator, FIXED_DT);
+                    accumulator = Math.min(accumulator, 2 * FIXED_DT);
                 }
 
                 renderAlpha = accumulator / FIXED_DT;
