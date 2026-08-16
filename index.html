@@ -154,7 +154,8 @@
             const GRAVITY = 980;
             const POP_DURATION = 0.28;
             const BORDER = 14;
-            const FIXED_DT = 1 / 120;
+            const FIXED_DT = isTouchDevice ? 1 / 60 : 1 / 120;
+            const MAX_CANVAS_DPR = isTouchDevice ? 1.5 : 3;
 
             const PLAYER = {
                 width: 34,
@@ -782,10 +783,27 @@
                     updateActionState();
                 };
 
-                button.addEventListener("pointerdown", event => set(true, event));
-                button.addEventListener("pointerup", event => set(false, event));
-                button.addEventListener("pointercancel", event => set(false, event));
-                button.addEventListener("pointerleave", event => set(false, event));
+                const release = (event) => {
+                    set(false, event);
+                    if (button.hasPointerCapture?.(event.pointerId)) {
+                        button.releasePointerCapture(event.pointerId);
+                    }
+                };
+
+                button.addEventListener("pointerdown", event => {
+                    set(true, event);
+                    if (button.setPointerCapture) {
+                        button.setPointerCapture(event.pointerId);
+                    }
+                });
+                button.addEventListener("pointerup", release);
+                button.addEventListener("pointercancel", release);
+                button.addEventListener("lostpointercapture", event => set(false, event));
+                button.addEventListener("pointerleave", event => {
+                    if (event.pointerType === "mouse") {
+                        set(false, event);
+                    }
+                });
                 button.addEventListener("contextmenu", event => event.preventDefault());
             }
 
@@ -899,7 +917,7 @@
                 const displayH = Math.max(1, Math.floor(H * scale));
                 const offsetX = Math.floor((viewportW - displayW) / 2);
                 const offsetY = Math.floor((viewportH - displayH) / 2);
-                const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+                const dpr = Math.max(1, Math.min(MAX_CANVAS_DPR, window.devicePixelRatio || 1));
 
                 canvas.style.width = `${displayW}px`;
                 canvas.style.height = `${displayH}px`;
