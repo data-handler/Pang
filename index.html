@@ -791,6 +791,7 @@
                 h: PLAYER.height,
                 x: W * 0.5,
                 y: FLOOR_Y - 48,
+                prevX: W * 0.5,
                 vx: 0,
                 speed: PLAYER.speed,
                 facing: 1,
@@ -803,6 +804,8 @@
                     r: BALL_SIZES[size],
                     x,
                     y,
+                    prevX: x,
+                    prevY: y,
                     vx: BALL_VX[size] * dir,
                     vy,
                     squash: 0
@@ -850,6 +853,7 @@
 
             let last = performance.now();
             let accumulator = 0;
+            let renderAlpha = 1;
             let simulationTime = 0;
             let musicMuted = false;
             let sfxMuted = false;
@@ -993,6 +997,10 @@
                 return Math.max(min, Math.min(max, value));
             }
 
+            function lerp(a, b, t) {
+                return a + (b - a) * t;
+            }
+
             function playSound(sound) {
                 if (sfxMuted) return;
                 sound.currentTime = 0;
@@ -1028,6 +1036,7 @@
                 comboCalloutTimer = 0;
 
                 player.x = W * 0.5;
+                player.prevX = W * 0.5;
                 playerDead = false;
                 deathTimer = 0;
                 levelClear = false;
@@ -1097,6 +1106,8 @@
                 pops.push({
                     x,
                     y,
+                    prevX: x,
+                    prevY: y,
                     r,
                     life: POP_DURATION
                 });
@@ -1106,6 +1117,7 @@
                 scorePopups.push({
                     x,
                     y,
+                    prevY: y,
                     value,
                     life: SCORE_POPUP_LIFE
                 });
@@ -1116,6 +1128,8 @@
                     pops.push({
                         x,
                         y,
+                        prevX: x,
+                        prevY: y,
                         r: radius,
                         life,
                         vx: (Math.random() - 0.5) * speed,
@@ -1140,6 +1154,7 @@
                 powerUps.push({
                     x,
                     y,
+                    prevY: y,
                     vy: POWERUP.fallSpeed,
                     type,
                     grounded: false,
@@ -1228,11 +1243,13 @@
                     bullets.push({
                         x: player.x - PLAYER.shootOffsetX,
                         y: player.y + PLAYER.shootOffsetY,
+                        prevY: player.y + PLAYER.shootOffsetY,
                         vy: BULLET.speedY
                     });
                     bullets.push({
                         x: player.x + PLAYER.shootOffsetX,
                         y: player.y + PLAYER.shootOffsetY,
+                        prevY: player.y + PLAYER.shootOffsetY,
                         vy: BULLET.speedY
                     });
 
@@ -1257,6 +1274,7 @@
                 return {
                     x,
                     yTop: FLOOR_Y,
+                    prevYTop: FLOOR_Y,
                     yBottom: FLOOR_Y,
                     maxTop: 0,
                     speed: harpoonSpeed
@@ -1344,11 +1362,37 @@
                     accumulator -= FIXED_DT;
                 }
 
+                renderAlpha = accumulator / FIXED_DT;
                 draw();
                 requestAnimationFrame(tick);
             }
 
+            function savePrevPositions() {
+                player.prevX = player.x;
+                for (const ball of balls) {
+                    ball.prevX = ball.x;
+                    ball.prevY = ball.y;
+                }
+                for (const harpoon of harpoons) {
+                    harpoon.prevYTop = harpoon.yTop;
+                }
+                for (const bullet of bullets) {
+                    bullet.prevY = bullet.y;
+                }
+                for (const pop of pops) {
+                    pop.prevX = pop.x;
+                    pop.prevY = pop.y;
+                }
+                for (const popup of scorePopups) {
+                    popup.prevY = popup.y;
+                }
+                for (const powerUp of powerUps) {
+                    powerUp.prevY = powerUp.y;
+                }
+            }
+
             function simulateStep(dt) {
+                savePrevPositions();
                 updateTimers(dt);
                 simulationTime += dt;
 
@@ -2300,7 +2344,7 @@
             function drawPlayer() {
                 if (playerDead) return;
 
-                const px = player.x;
+                const px = lerp(player.prevX, player.x, renderAlpha);
                 const py = player.y;
                 const scale = 1.5;
 
@@ -2380,24 +2424,27 @@
             function drawPlayerDeathMarker() {
                 if (!playerDead) return;
 
+                const px = lerp(player.prevX, player.x, renderAlpha);
+                const py = player.y;
                 ctx.strokeStyle = "#ffffff";
                 ctx.lineWidth = 3;
                 ctx.beginPath();
-                ctx.moveTo(player.x - 12, player.y + 4);
-                ctx.lineTo(player.x + 12, player.y + 28);
-                ctx.moveTo(player.x + 12, player.y + 4);
-                ctx.lineTo(player.x - 12, player.y + 28);
+                ctx.moveTo(px - 12, py + 4);
+                ctx.lineTo(px + 12, py + 28);
+                ctx.moveTo(px + 12, py + 4);
+                ctx.lineTo(px - 12, py + 28);
                 ctx.stroke();
             }
 
             function drawHarpoons() {
                 for (const harpoon of harpoons) {
+                    const yTop = lerp(harpoon.prevYTop, harpoon.yTop, renderAlpha);
                     ctx.strokeStyle = "#d1d5db";
                     ctx.lineWidth = 2;
                     ctx.beginPath();
                     ctx.moveTo(harpoon.x, harpoon.yBottom);
 
-                    for (let y = harpoon.yBottom; y >= harpoon.yTop; y -= 8) {
+                    for (let y = harpoon.yBottom; y >= yTop; y -= 8) {
                         const offset = Math.sin((harpoon.yBottom - y) * 0.18) * 3;
                         ctx.lineTo(harpoon.x + offset, y);
                     }
@@ -2405,15 +2452,15 @@
                     ctx.stroke();
 
                     ctx.beginPath();
-                    ctx.moveTo(harpoon.x, harpoon.yTop - 6);
-                    ctx.lineTo(harpoon.x - 5, harpoon.yTop + 4);
-                    ctx.lineTo(harpoon.x + 5, harpoon.yTop + 4);
+                    ctx.moveTo(harpoon.x, yTop - 6);
+                    ctx.lineTo(harpoon.x - 5, yTop + 4);
+                    ctx.lineTo(harpoon.x + 5, yTop + 4);
                     ctx.closePath();
                     ctx.fillStyle = "#d1d5db";
                     ctx.fill();
 
                     ctx.beginPath();
-                    ctx.arc(harpoon.x, harpoon.yTop + 10, 4, 0, Math.PI * 2);
+                    ctx.arc(harpoon.x, yTop + 10, 4, 0, Math.PI * 2);
                     ctx.fillStyle = "#ef4444";
                     ctx.fill();
                 }
@@ -2421,17 +2468,20 @@
 
             function drawBullets() {
                 for (const bullet of bullets) {
+                    const by = lerp(bullet.prevY, bullet.y, renderAlpha);
                     ctx.fillStyle = "#fde68a";
-                    ctx.fillRect(bullet.x - 2, bullet.y - 10, 4, 12);
+                    ctx.fillRect(bullet.x - 2, by - 10, 4, 12);
 
                     ctx.fillStyle = "#fff7ed";
-                    ctx.fillRect(bullet.x - 1, bullet.y - 14, 2, 4);
+                    ctx.fillRect(bullet.x - 1, by - 14, 2, 4);
                 }
             }
 
             function drawBallShadows() {
                 for (const ball of balls) {
-                    const groundDist = FLOOR_Y - (ball.y + ball.r);
+                    const bx = lerp(ball.prevX, ball.x, renderAlpha);
+                    const by = lerp(ball.prevY, ball.y, renderAlpha);
+                    const groundDist = FLOOR_Y - (by + ball.r);
                     const t = Math.max(0, Math.min(1, 1 - groundDist / 260));
 
                     const shadowW = ball.r * (0.55 + t * 0.45);
@@ -2439,7 +2489,7 @@
                     const alpha = 0.06 + t * 0.16;
 
                     ctx.beginPath();
-                    ctx.ellipse(ball.x, FLOOR_Y - 4, shadowW, shadowH, 0, 0, Math.PI * 2);
+                    ctx.ellipse(bx, FLOOR_Y - 4, shadowW, shadowH, 0, 0, Math.PI * 2);
                     ctx.fillStyle = `rgba(0,0,0,${alpha})`;
                     ctx.fill();
                 }
@@ -2447,12 +2497,14 @@
 
             function drawBalls() {
                 for (const ball of balls) {
+                    const bx = lerp(ball.prevX, ball.x, renderAlpha);
+                    const by = lerp(ball.prevY, ball.y, renderAlpha);
                     const stretch = Math.max(0, -ball.vy * 0.0008);
                     const squashX = 1 + ball.squash * 0.18 - stretch * 0.15;
                     const squashY = 1 - ball.squash * 0.18 + stretch * 0.3;
 
                     ctx.save();
-                    ctx.translate(ball.x, ball.y);
+                    ctx.translate(bx, by);
                     ctx.scale(squashX, squashY);
 
                     ctx.shadowBlur = 32;
@@ -2498,23 +2550,25 @@
             function drawPops() {
                 for (const pop of pops) {
                     const t = pop.life / (pop.spark ? 0.22 : POP_DURATION);
+                    const px = lerp(pop.prevX ?? pop.x, pop.x, renderAlpha);
+                    const py = lerp(pop.prevY ?? pop.y, pop.y, renderAlpha);
 
                     if (pop.spark) {
                         ctx.beginPath();
-                        ctx.arc(pop.x, pop.y, pop.r + (1 - t) * 1.5, 0, Math.PI * 2);
+                        ctx.arc(px, py, pop.r + (1 - t) * 1.5, 0, Math.PI * 2);
                         ctx.fillStyle = `rgba(255,240,180,${t})`;
                         ctx.fill();
                     } else {
                         const rr = pop.r * (1.2 - t * 0.4);
 
                         ctx.beginPath();
-                        ctx.arc(pop.x, pop.y, rr, 0, Math.PI * 2);
+                        ctx.arc(px, py, rr, 0, Math.PI * 2);
                         ctx.strokeStyle = `rgba(255,255,255,${t})`;
                         ctx.lineWidth = 3;
                         ctx.stroke();
 
                         ctx.beginPath();
-                        ctx.arc(pop.x, pop.y, rr * 0.6, 0, Math.PI * 2);
+                        ctx.arc(px, py, rr * 0.6, 0, Math.PI * 2);
                         ctx.strokeStyle = `rgba(255,200,220,${t * 0.8})`;
                         ctx.lineWidth = 2;
                         ctx.stroke();
@@ -2524,10 +2578,11 @@
 
             function drawScorePopups() {
                 for (const popup of scorePopups) {
+                    const py = lerp(popup.prevY ?? popup.y, popup.y, renderAlpha);
                     ctx.fillStyle = `rgba(255,255,180,${popup.life})`;
                     ctx.font = "bold 18px system-ui, sans-serif";
                     ctx.textAlign = "center";
-                    ctx.fillText(popup.value, popup.x, popup.y);
+                    ctx.fillText(popup.value, popup.x, py);
                 }
                 ctx.textAlign = "left";
             }
@@ -2598,7 +2653,7 @@
                     }
 
                     ctx.save();
-                    ctx.translate(powerUp.x, powerUp.y + Math.sin(powerUp.anim || 0) * 2);
+                    ctx.translate(powerUp.x, lerp(powerUp.prevY ?? powerUp.y, powerUp.y, renderAlpha) + Math.sin(powerUp.anim || 0) * 2);
                     ctx.beginPath();
                     ctx.arc(0, 0, 26, 0, Math.PI * 2);
                     ctx.fillStyle = "rgba(255,255,255,0.08)";
