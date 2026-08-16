@@ -1352,6 +1352,7 @@
                 last = now;
                 accumulator += frameDt;
 
+                savePrevPositions();
                 while (accumulator >= FIXED_DT) {
                     if (hitStopTimer > 0) {
                         updateTimers(FIXED_DT);
@@ -1392,7 +1393,6 @@
             }
 
             function simulateStep(dt) {
-                savePrevPositions();
                 updateTimers(dt);
                 simulationTime += dt;
 
