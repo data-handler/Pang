@@ -1380,8 +1380,8 @@
                 last = now;
                 accumulator += frameDt;
 
-                savePrevPositions();
                 while (accumulator >= FIXED_DT) {
+                    savePrevPositions();
                     if (hitStopTimer > 0) {
                         updateTimers(FIXED_DT);
                         hitStopTimer = Math.max(0, hitStopTimer - FIXED_DT);
