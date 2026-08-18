@@ -144,7 +144,6 @@
 
             let audioCtx = null;
             const sfxBuffers = {};
-            const _sfxLoadErrors = []; // visible in the ?diag=1 overlay
 
             function getAudioContext() {
                 if (!audioCtx) {
@@ -178,8 +177,6 @@
                         sfxBuffers[key] = await ctx.decodeAudioData(arrayBuffer);
                     } catch (err) {
                         // sfxBuffers[key] stays unset; playSound() no-ops for it
-                        const msg = `${key}: ${err && err.message ? err.message : err}`;
-                        _sfxLoadErrors.push(msg);
                         console.error(`Failed to load SFX "${key}" (${src}):`, err);
                     }
                 }));
@@ -210,12 +207,6 @@
             // URL flag ?dpr=1 forces canvas DPR to 1 for rendering-resolution testing
             const _urlDpr = parseFloat(new URLSearchParams(location.search).get("dpr"));
             const MAX_CANVAS_DPR = (_urlDpr > 0 ? _urlDpr : (isTouchDevice ? 1.5 : 2));
-            // URL flag ?diag=1  → on-screen diagnostics overlay
-            // URL flag ?diag=direct → overlay + direct rAF player movement (bypasses fixed-step for player only)
-            const _diagParam = new URLSearchParams(location.search).get("diag");
-            const DIAG_OVERLAY  = _diagParam === "1" || _diagParam === "direct";
-            const DIAG_DIRECT   = _diagParam === "direct";
-
             const PLAYER = {
                 width: 34,
                 height: 28,
@@ -943,19 +934,8 @@
             let renderAlpha = 1;
             let simulationTime = 0;
 
-            // --- diagnostics state (used when DIAG_OVERLAY is on) ---
-            const _diagBuf = [];          // ring-buffer of recent frameDt values (seconds)
-            const _DIAG_WINDOW = 2;       // seconds of history to track
-            let _diagLastDt   = 0;
-            let _diagSteps    = 0;
-            // --------------------------------------------------------
-            // URL flags for iOS stall testing: ?audio=off disables both music
-            // and SFX; ?music=off / ?sfx=off isolate one or the other so we
-            // can tell which is actually responsible for the judder.
-            const _urlParams = new URLSearchParams(location.search);
-            const _audioDisabled = _urlParams.get("audio") === "off";
-            let musicMuted = _audioDisabled || _urlParams.get("music") === "off";
-            let sfxMuted = _audioDisabled || _urlParams.get("sfx") === "off";
+            let musicMuted = false;
+            let sfxMuted = false;
             let paused = false;
             let reduceMotion = isTouchDevice || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
             let highContrastMode = false;
@@ -1469,18 +1449,6 @@
                 last = now;
                 accumulator += frameDt;
 
-                // --- record frame timing for diagnostics ---
-                if (DIAG_OVERLAY) {
-                    _diagLastDt = frameDt;
-                    _diagBuf.push(frameDt);
-                    // trim entries older than _DIAG_WINDOW seconds
-                    let sum = 0;
-                    for (const v of _diagBuf) sum += v;
-                    while (_diagBuf.length > 1 && sum - _diagBuf[0] > _DIAG_WINDOW) {
-                        sum -= _diagBuf.shift();
-                    }
-                }
-
                 let steps = 0;
                 while (accumulator >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
                     savePrevPositions();
@@ -1499,26 +1467,6 @@
                 if (accumulator >= FIXED_DT) {
                     accumulator = Math.min(accumulator, 2 * FIXED_DT);
                 }
-
-                // DIAG_DIRECT: bypass fixed-step interpolation for the player.
-                // Move player directly from raw rAF frameDt so we can compare
-                // smoothness against the normal interpolated path.
-                if (DIAG_DIRECT && gameState === "playing" && !playerDead && !paused) {
-                    let dir = 0;
-                    if (actionState.left)  dir -= 1;
-                    if (actionState.right) dir += 1;
-                    if (dir !== 0) {
-                        player.facing = dir;
-                        player.moving = true;
-                    } else {
-                        player.moving = false;
-                    }
-                    const diagVx = dir * player.speed + levelWind * 0.35;
-                    player.x = clamp(player.x + diagVx * frameDt, player.w / 2, W - player.w / 2);
-                    player.prevX = player.x; // suppress interpolation
-                }
-
-                if (DIAG_OVERLAY) _diagSteps = steps;
 
                 renderAlpha = accumulator / FIXED_DT;
                 draw();
@@ -1572,7 +1520,7 @@
 
                 updateRoundState(dt);
                 updatePlatforms(dt);
-                if (!DIAG_DIRECT) updatePlayer(dt);
+                updatePlayer(dt);
                 updateBalls(dt);
                 updatePlayerBallCollision();
                 updateHazards(dt);
@@ -2068,7 +2016,6 @@
                 drawFrame();
                 drawBorderText();
                 drawAudioStatus();
-                if (DIAG_OVERLAY) drawDiagOverlay();
             }
 
             function drawTopScores(x, y) {
@@ -3166,65 +3113,6 @@
                 ctx.fillText(text, BORDER, H);
                 ctx.restore();
             }
-
-            // --- TEMPORARY diagnostics overlay (?diag=1 or ?diag=direct) ---
-            // Remove this function (and its call in draw()) once the judder is identified.
-            function drawDiagOverlay() {
-                if (!_diagBuf.length) return;
-
-                // Compute rolling stats from _diagBuf
-                let sum = 0, minDt = Infinity, maxDt = -Infinity;
-                for (const v of _diagBuf) {
-                    sum  += v;
-                    if (v < minDt) minDt = v;
-                    if (v > maxDt) maxDt = v;
-                }
-                const avgDt  = sum / _diagBuf.length;
-                const fps    = avgDt > 0 ? 1 / avgDt : 0;
-                const dpr    = Math.max(1, Math.min(MAX_CANVAS_DPR, window.devicePixelRatio || 1));
-
-                const lines = [
-                    DIAG_DIRECT ? "DIAG: direct rAF player" : "DIAG: overlay",
-                    `rAF dt   : ${(_diagLastDt * 1000).toFixed(2)} ms`,
-                    `avg dt   : ${(avgDt * 1000).toFixed(2)} ms`,
-                    `min dt   : ${(minDt * 1000).toFixed(2)} ms`,
-                    `max dt   : ${(maxDt * 1000).toFixed(2)} ms`,
-                    `FPS (avg): ${fps.toFixed(1)}`,
-                    `sim steps: ${_diagSteps}`,
-                    `accum    : ${(accumulator * 1000).toFixed(2)} ms`,
-                    `alpha    : ${renderAlpha.toFixed(3)}`,
-                    `canvas   : ${canvas.width}×${canvas.height} px`,
-                    `DPR      : ${dpr.toFixed(2)}  (device: ${(window.devicePixelRatio || 1).toFixed(2)})`,
-                    `AudioCtx : ${audioCtx ? audioCtx.state : "none"}`,
-                    `SFX bufs : ${Object.keys(sfxBuffers).length}/${Object.keys(SFX_SOURCES).length} loaded`,
-                    ..._sfxLoadErrors.map(e => `SFX ERR: ${e}`),
-                ];
-
-                ctx.save();
-                const pad  = 6;
-                const lh   = 14;
-                const fh   = 11;
-                const bw   = 200;
-                const bh   = pad * 2 + lines.length * lh;
-                const bx   = W - bw - BORDER;
-                const by   = BORDER + 2;
-
-                ctx.globalAlpha = 0.82;
-                ctx.fillStyle   = "#000";
-                ctx.fillRect(bx, by, bw, bh);
-                ctx.globalAlpha = 1;
-                ctx.font        = `${fh}px monospace`;
-                ctx.textAlign   = "left";
-                ctx.textBaseline = "top";
-
-                for (let i = 0; i < lines.length; i++) {
-                    // colour the header line differently
-                    ctx.fillStyle = i === 0 ? (DIAG_DIRECT ? "#fb923c" : "#86efac") : "#e2e8f0";
-                    ctx.fillText(lines[i], bx + pad, by + pad + i * lh);
-                }
-                ctx.restore();
-            }
-            // --- end diagnostics overlay ---
 
             function drawFlash() {
                 if (flashTimer <= 0) return;
