@@ -177,6 +177,7 @@
                         sfxBuffers[key] = await ctx.decodeAudioData(arrayBuffer);
                     } catch (err) {
                         // sfxBuffers[key] stays unset; playSound() no-ops for it
+                        console.error(`Failed to load SFX "${key}" (${src}):`, err);
                     }
                 }));
             })();
