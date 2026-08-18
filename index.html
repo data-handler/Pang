@@ -709,6 +709,9 @@
                     for (const track of Object.values(musicTracks)) {
                         track.muted = musicMuted;
                     }
+                    if (!musicMuted && currentMusicTrack && currentMusicTrack.paused) {
+                        currentMusicTrack.play().catch(() => { });
+                    }
                     return;
                 }
 
@@ -1122,7 +1125,16 @@
                 }
 
                 currentMusicTrack = track;
-                currentMusicTrack.play();
+                if (musicMuted) return;
+
+                // Defer play() to a separate task. loadLevel() (and this call)
+                // can run synchronously inside tick()'s fixed-step simulation
+                // loop on level transitions; starting playback here forces the
+                // browser to fetch/buffer/decode a not-yet-loaded track (music
+                // files are 600KB-1.7MB) inside that frame, stalling it before
+                // draw() and the next requestAnimationFrame run. This was the
+                // source of the judder observed on iOS Safari.
+                setTimeout(() => currentMusicTrack.play().catch(() => { }), 0);
             }
 
             function preparePlatforms(platformList = []) {
