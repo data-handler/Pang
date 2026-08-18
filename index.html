@@ -1050,10 +1050,35 @@
                 return a + (b - a) * t;
             }
 
+            // Rapidly re-triggering the same shared <audio> element (resetting
+            // currentTime and calling play() again mid-combo) hitches on iOS
+            // Safari. Pool a few cloned instances per sound so overlapping
+            // triggers use a free instance instead of interrupting one another.
+            const SFX_POOL_SIZE = 4;
+            const soundPools = new Map();
+
             function playSound(sound) {
                 if (sfxMuted) return;
-                sound.currentTime = 0;
-                const playAttempt = sound.play();
+
+                let pool = soundPools.get(sound);
+                if (!pool) {
+                    pool = [sound];
+                    soundPools.set(sound, pool);
+                }
+
+                let instance = pool.find(a => a.paused || a.ended);
+                if (!instance) {
+                    if (pool.length < SFX_POOL_SIZE) {
+                        instance = sound.cloneNode(true);
+                        pool.push(instance);
+                    } else {
+                        instance = pool[0];
+                        pool.push(pool.shift());
+                    }
+                }
+
+                instance.currentTime = 0;
+                const playAttempt = instance.play();
                 if (playAttempt && typeof playAttempt.catch === "function") {
                     playAttempt.catch(() => { });
                 }
