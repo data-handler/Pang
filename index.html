@@ -117,6 +117,7 @@
         (() => {
             const canvas = document.getElementById("c");
             const ctx = canvas.getContext("2d");
+            const hintEl = document.querySelector(".hint");
             const touchButtons = {
                 left: document.getElementById("touchLeft"),
                 right: document.getElementById("touchRight"),
@@ -200,11 +201,11 @@
             // across every draw function.
             const THEME = {
                 knight: {
-                    armorHi: "#cbd5e1",
-                    armor: "#94a3b8",
-                    armorLo: "#64748b",
-                    trim: "#b45309",
-                    helmet: "#cbd5e1",
+                    armorHi: "#e0f2fe",
+                    armor: "#38bdf8",
+                    armorLo: "#0284c7",
+                    trim: "#f59e0b",
+                    helmet: "#e0f2fe",
                     plume: "#dc2626",
                     skin: "#f5d0a9",
                     boots: "#78350f",
@@ -218,7 +219,7 @@
                     pierceTip: "#4ade80",
                     stickyColor: "#fde68a"
                 },
-                slimeTiers: ["#0d9488", "#16a34a", "#4ade80", "#86efac"],
+                slimeTiers: ["#14b8a6", "#22c55e", "#4ade80", "#86efac"],
                 slime: {
                     highlight: "#f0fdf4",
                     shadow: "#14532d",
@@ -227,10 +228,10 @@
                     eyePupil: "#052e16"
                 },
                 env: {
-                    skyMeadow: "#7dd3fc",
+                    skyMeadow: "#38bdf8",
                     canopyDark: "#166534",
-                    canopyMid: "#22c55e",
-                    grassGround: "#4d7c0f",
+                    canopyMid: "#4ade80",
+                    grassGround: "#84cc16",
                     floorBase: "#57534e",
                     floorMortar: "#292524",
                     platformSolid: "#78716c",
@@ -2220,6 +2221,13 @@
             // --- draw ---
 
             function draw() {
+                // The accessibility hotkey hint (R/C/G/T) and the canvas-drawn
+                // credit line only ever need to coexist if both are visible at
+                // once; making them mutually exclusive by game state avoids
+                // any pixel-level coordination between a fixed-position HTML
+                // element and the dynamically-scaled canvas beneath it.
+                hintEl.style.display = gameState === "playing" ? "" : "none";
+
                 ctx.save();
 
                 applyScreenShake();
@@ -2463,9 +2471,18 @@
                     c.fillStyle = grad;
                     c.fillRect(0, 0, W, FLOOR_Y);
 
+                    const sunGrad = c.createRadialGradient(W - 140, 100, 0, W - 140, 100, 50);
+                    sunGrad.addColorStop(0, "#fffbeb");
+                    sunGrad.addColorStop(0.5, "rgba(255,240,150,0.9)");
+                    sunGrad.addColorStop(1, "rgba(255,220,120,0)");
                     c.beginPath();
-                    c.arc(W - 140, 100, 45, 0, Math.PI * 2);
-                    c.fillStyle = "rgba(255,255,180,0.75)";
+                    c.arc(W - 140, 100, 50, 0, Math.PI * 2);
+                    c.fillStyle = sunGrad;
+                    c.fill();
+
+                    c.beginPath();
+                    c.arc(W - 140, 100, 22, 0, Math.PI * 2);
+                    c.fillStyle = "#fff7c2";
                     c.fill();
 
                     c.fillStyle = THEME.env.canopyDark;
@@ -2485,9 +2502,18 @@
                     c.fillStyle = grad;
                     c.fillRect(0, 0, W, FLOOR_Y);
 
+                    const moonGrad = c.createRadialGradient(W - 120, 90, 0, W - 120, 90, 45);
+                    moonGrad.addColorStop(0, "#ffffff");
+                    moonGrad.addColorStop(0.55, "rgba(226,232,240,0.55)");
+                    moonGrad.addColorStop(1, "rgba(226,232,240,0)");
                     c.beginPath();
-                    c.arc(W - 120, 90, 30, 0, Math.PI * 2);
-                    c.fillStyle = "#e2e8f0";
+                    c.arc(W - 120, 90, 45, 0, Math.PI * 2);
+                    c.fillStyle = moonGrad;
+                    c.fill();
+
+                    c.beginPath();
+                    c.arc(W - 120, 90, 28, 0, Math.PI * 2);
+                    c.fillStyle = "#f8fafc";
                     c.fill();
 
                     c.fillStyle = "rgba(255,255,255,0.8)";
@@ -2561,30 +2587,28 @@
                     ctx.textAlign = "center";
 
                     ctx.fillStyle = "#fde68a";
-                    ctx.font = "bold 64px system-ui, sans-serif";
-                    ctx.fillText("SLIME SIEGE", W / 2, 120);
+                    ctx.font = "bold 56px system-ui, sans-serif";
+                    ctx.fillText("SLIME SIEGE", W / 2, 92);
 
                     ctx.fillStyle = "#ffffff";
-                    ctx.font = "20px system-ui, sans-serif";
-                    ctx.fillText("A Squishy Arcade Adventure", W / 2, 155);
+                    ctx.font = "18px system-ui, sans-serif";
+                    ctx.fillText("A Squishy Arcade Adventure", W / 2, 122);
 
                     ctx.fillStyle = THEME.hud.textDim;
-                    ctx.font = "24px system-ui, sans-serif";
-                    ctx.fillText("Move: A / D, Arrow Keys, or Touch", W / 2, 210);
-                    ctx.fillText("Fire: Space or FIRE button", W / 2, 240);
-                    ctx.fillText(`Loadout: ${LOADOUTS[selectedLoadoutIndex].name}`, W / 2, 270);
+                    ctx.font = "18px system-ui, sans-serif";
+                    ctx.fillText("Move: A/D or Touch  ·  Fire: Space or Touch", W / 2, 165);
 
                     ctx.fillStyle = THEME.hud.frameInner;
-                    ctx.font = "18px system-ui, sans-serif";
-                    ctx.fillText("Q / E to switch loadout", W / 2, 295);
+                    ctx.font = "16px system-ui, sans-serif";
+                    ctx.fillText(`Loadout: ${LOADOUTS[selectedLoadoutIndex].name}  (Q/E to change)`, W / 2, 192);
 
                     if (Math.floor(startupBlinkTimer * 2) % 2 === 0) {
                         ctx.fillStyle = "#ffffff";
-                        ctx.font = "bold 28px system-ui, sans-serif";
-                        ctx.fillText(startupActionText, W / 2, 320);
+                        ctx.font = "bold 30px system-ui, sans-serif";
+                        ctx.fillText(startupActionText, W / 2, 240);
                     }
 
-                    drawTopScores(W / 2, 355);
+                    drawTopScores(W / 2, 285);
 
                     ctx.textAlign = "left";
                 }
