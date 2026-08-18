@@ -42,7 +42,7 @@
             position: fixed;
             left: 0;
             right: 0;
-            bottom: 10px;
+            bottom: 30px;
             text-align: center;
             font-size: 14px;
             opacity: .8;
@@ -102,7 +102,7 @@
     <div id="gameShell">
         <canvas id="c" width="900" height="520"></canvas>
     </div>
-    <div class="hint">Move: A/D or ←/→ (or touch) · Fire: Space (or touch) · Q/E Loadout · P Pause · M Music · S SFX · R/C/G/T Accessibility</div>
+    <div class="hint">R/C/G/T Accessibility</div>
     <div class="touch-controls">
         <div class="touch-cluster">
             <button class="touch-btn" id="touchLeft" aria-label="Move left">◀</button>
@@ -214,7 +214,9 @@
                     lanceShaft: "#92400e",
                     lanceTip: "#e2e8f0",
                     boltCore: "#c084fc",
-                    boltGlow: "#e9d5ff"
+                    boltGlow: "#e9d5ff",
+                    pierceTip: "#4ade80",
+                    stickyColor: "#fde68a"
                 },
                 slimeTiers: ["#0d9488", "#16a34a", "#4ade80", "#86efac"],
                 slime: {
@@ -295,6 +297,9 @@
                 width: 4,
                 height: 12
             };
+
+            const STICKY_HARPOON_DURATION = 2.5;
+            const STICKY_HARPOON_FLICKER_AT = 0.5;
 
             const SCORE_POPUP_LIFE = 0.8;
             const COMBO_RESET_TIME = 1.0;
@@ -1153,6 +1158,13 @@
                 const loadout = LOADOUTS[selectedLoadoutIndex];
                 weaponType = "harpoon";
                 harpoonSpeed = loadout.harpoonSpeed;
+                clearProjectiles();
+            }
+
+            // Clears in-flight shots without resetting the equipped weapon -
+            // used on level transitions so the weapon persists across rounds
+            // (only dying should cost you your weapon).
+            function clearProjectiles() {
                 bulletCooldown = 0;
                 bullets = [];
                 harpoons = [];
@@ -1170,7 +1182,7 @@
             }
 
             function resetLevelState() {
-                resetWeaponState();
+                clearProjectiles();
                 powerUps = [];
                 pops = [];
                 scorePopups = [];
@@ -1314,17 +1326,32 @@
                 }
             }
 
+            function pickWeighted(entries) {
+                const total = entries.reduce((sum, e) => sum + e.weight, 0);
+                let roll = Math.random() * total;
+                for (const entry of entries) {
+                    if (roll < entry.weight) return entry.type;
+                    roll -= entry.weight;
+                }
+                return entries[entries.length - 1].type;
+            }
+
+            const POWERUP_POOL = [
+                { type: "freeze", weight: 18 },
+                { type: "bomb", weight: 10 },
+                { type: "twin", weight: 20 },
+                { type: "gun", weight: 20 },
+                { type: "pierceHarpoon", weight: 12 },
+                { type: "tripleHarpoon", weight: 8 },
+                { type: "rapidGun", weight: 7 },
+                { type: "stickyHarpoon", weight: 5 }
+            ];
+
             function maybeSpawnPowerUp(x, y) {
                 if (challengeType === "no_powerups") return;
                 if (Math.random() > POWERUP.spawnChance) return;
 
-                const roll = Math.random();
-                let type;
-
-                if (roll < 0.30) type = "freeze";
-                else if (roll < 0.55) type = "twin";
-                else if (roll < 0.80) type = "gun";
-                else type = "bomb";
+                const type = pickWeighted(POWERUP_POOL);
 
                 powerUps.push({
                     x,
@@ -1419,8 +1446,10 @@
                 spawnScore(W / 2, H / 2 + 40, `BONUS ${timeBonus}`);
             }
 
+            const GUN_COOLDOWN_MULT = { gun: 1, rapidGun: 0.45 };
+
             function fireWeapon() {
-                if (weaponType === "gun") {
+                if (weaponType === "gun" || weaponType === "rapidGun") {
                     if (bulletCooldown > 0) return;
 
                     playSound("shoot");
@@ -1438,7 +1467,7 @@
                         vy: BULLET.speedY
                     });
 
-                    bulletCooldown = BULLET.cooldown * bulletCooldownFactor;
+                    bulletCooldown = BULLET.cooldown * bulletCooldownFactor * GUN_COOLDOWN_MULT[weaponType];
                     return;
                 }
 
@@ -1452,17 +1481,38 @@
                     return;
                 }
 
+                if (weaponType === "tripleHarpoon") {
+                    harpoons.push(createHarpoon(clamp(player.x - PLAYER.twinHarpoonOffsetX, 6, W - 6)));
+                    harpoons.push(createHarpoon(player.x));
+                    harpoons.push(createHarpoon(clamp(player.x + PLAYER.twinHarpoonOffsetX, 6, W - 6)));
+                    return;
+                }
+
+                if (weaponType === "pierceHarpoon") {
+                    harpoons.push(createHarpoon(player.x, { pierce: true }));
+                    return;
+                }
+
+                if (weaponType === "stickyHarpoon") {
+                    harpoons.push(createHarpoon(player.x, { sticky: true }));
+                    return;
+                }
+
                 harpoons.push(createHarpoon(player.x));
             }
 
-            function createHarpoon(x) {
+            function createHarpoon(x, opts = {}) {
                 return {
                     x,
                     yTop: FLOOR_Y,
                     prevYTop: FLOOR_Y,
                     yBottom: FLOOR_Y,
                     maxTop: 0,
-                    speed: harpoonSpeed
+                    speed: harpoonSpeed,
+                    pierce: opts.pierce || false,
+                    sticky: opts.sticky || false,
+                    stuck: false,
+                    stickTimer: 0
                 };
             }
 
@@ -1526,13 +1576,21 @@
 
             function getWeaponLabel() {
                 if (weaponType === "gun") return "Wand";
+                if (weaponType === "rapidGun") return "Rapid Wand";
                 if (weaponType === "twinHarpoon") return "Twin Lance";
+                if (weaponType === "tripleHarpoon") return "Triple Lance";
+                if (weaponType === "pierceHarpoon") return "Piercing Lance";
+                if (weaponType === "stickyHarpoon") return "Sticky Lance";
                 return "Lance";
             }
 
             const POWERUP_LABELS = {
                 twin: "TWIN",
                 gun: "WAND",
+                pierceHarpoon: "PIERCE",
+                tripleHarpoon: "TRIPLE",
+                rapidGun: "RAPID",
+                stickyHarpoon: "STICKY",
                 freeze: "FREEZE",
                 bomb: "FLASK"
             };
@@ -1891,6 +1949,16 @@
                 }
             }
 
+            // Equipping any new weapon clears the current shot in flight -
+            // this is what lets picking up a fresh weapon cancel a sticky
+            // lance's lockout early, and applies uniformly to every weapon.
+            function equipWeapon(type, label, color, powerUp) {
+                weaponType = type;
+                harpoons = [];
+                spawnScore(powerUp.x, powerUp.y, label);
+                spawnParticles(powerUp.x, powerUp.y, { count: 8, radius: 2.5, life: 0.35, speed: 200, color });
+            }
+
             function applyPowerUp(powerUp) {
 
                 if (powerUp.type === "bomb") {
@@ -1907,16 +1975,32 @@
                 playSound("powerup");
 
                 if (powerUp.type === "twin") {
-                    weaponType = "twinHarpoon";
-                    spawnScore(powerUp.x, powerUp.y, POWERUP_LABELS.twin);
-                    spawnParticles(powerUp.x, powerUp.y, { count: 8, radius: 2.5, life: 0.35, speed: 200, color: THEME.weapon.lanceTip });
+                    equipWeapon("twinHarpoon", POWERUP_LABELS.twin, THEME.weapon.lanceTip, powerUp);
                     return;
                 }
 
                 if (powerUp.type === "gun") {
-                    weaponType = "gun";
-                    spawnScore(powerUp.x, powerUp.y, POWERUP_LABELS.gun);
-                    spawnParticles(powerUp.x, powerUp.y, { count: 8, radius: 2.5, life: 0.35, speed: 200, color: THEME.weapon.boltGlow });
+                    equipWeapon("gun", POWERUP_LABELS.gun, THEME.weapon.boltGlow, powerUp);
+                    return;
+                }
+
+                if (powerUp.type === "pierceHarpoon") {
+                    equipWeapon("pierceHarpoon", POWERUP_LABELS.pierceHarpoon, THEME.weapon.pierceTip, powerUp);
+                    return;
+                }
+
+                if (powerUp.type === "tripleHarpoon") {
+                    equipWeapon("tripleHarpoon", POWERUP_LABELS.tripleHarpoon, THEME.weapon.lanceTip, powerUp);
+                    return;
+                }
+
+                if (powerUp.type === "rapidGun") {
+                    equipWeapon("rapidGun", POWERUP_LABELS.rapidGun, THEME.weapon.boltGlow, powerUp);
+                    return;
+                }
+
+                if (powerUp.type === "stickyHarpoon") {
+                    equipWeapon("stickyHarpoon", POWERUP_LABELS.stickyHarpoon, THEME.weapon.stickyColor, powerUp);
                     return;
                 }
 
@@ -1999,6 +2083,22 @@
             function updateHarpoons(dt) {
                 for (let harpoonIndex = harpoons.length - 1; harpoonIndex >= 0; harpoonIndex--) {
                     const harpoon = harpoons[harpoonIndex];
+                    // A harpoon colliding with a weapon powerup mid-loop can
+                    // trigger applyPowerUp() -> harpoons = [] (equipping a new
+                    // weapon clears the shot in flight), reassigning the array
+                    // out from under this iteration - guard against that.
+                    if (!harpoon) continue;
+
+                    if (harpoon.stuck) {
+                        harpoon.stickTimer -= dt;
+                        if (harpoon.stickTimer <= 0) {
+                            harpoons.splice(harpoonIndex, 1);
+                            continue;
+                        }
+                        handleHarpoonBallCollision(harpoonIndex, harpoon);
+                        continue;
+                    }
+
                     harpoon.yTop -= harpoon.speed * dt;
 
                     if (harpoon.yTop <= harpoon.maxTop) {
@@ -2006,6 +2106,11 @@
                     }
 
                     if (harpoon.yTop <= 0) {
+                        if (harpoon.sticky) {
+                            harpoon.stuck = true;
+                            harpoon.stickTimer = STICKY_HARPOON_DURATION;
+                            continue;
+                        }
                         harpoons.splice(harpoonIndex, 1);
                         continue;
                     }
@@ -2061,7 +2166,9 @@
                     const assist = aimAssist ? 6 : 0;
                     const hits = Math.abs(ball.x - harpoon.x) < (ball.r + assist) && (ball.y + ball.r) > harpoon.yTop;
                     if (hits) {
-                        harpoons.splice(harpoonIndex, 1);
+                        if (!harpoon.pierce && !harpoon.stuck) {
+                            harpoons.splice(harpoonIndex, 1);
+                        }
                         destroyBall(ballIndex);
                         return true;
                     }
@@ -2149,7 +2256,6 @@
                 drawFlash();
                 drawFrame();
                 drawBorderText();
-                drawAudioStatus();
             }
 
             function drawTopScores(x, y) {
@@ -2552,32 +2658,30 @@
                 ctx.textAlign = "left";
             }
 
-            function drawHudHarpoonIcon() {
+            // Covers Lance (1, no tint), Twin (2), Triple (3), and Pierce/Sticky
+            // (1, tinted) - one shape, tint matches drawHarpoons()'s convention.
+            function drawHudLanceIcon(count, tint) {
                 ctx.save();
                 ctx.scale(0.65, 0.65);
 
-                ctx.strokeStyle = THEME.weapon.lanceShaft;
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(0, 14);
-                ctx.lineTo(0, -8);
-                ctx.stroke();
+                const positions = count === 1 ? [0] : count === 2 ? [-10, 10] : [-12, 0, 12];
+                for (const ox of positions) {
+                    ctx.strokeStyle = tint || THEME.weapon.lanceShaft;
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(ox, 14);
+                    ctx.lineTo(ox, -8);
+                    ctx.stroke();
 
-                ctx.beginPath();
-                ctx.moveTo(0, -14);
-                ctx.lineTo(-5, -4);
-                ctx.lineTo(5, -4);
-                ctx.closePath();
-                ctx.fillStyle = THEME.weapon.lanceTip;
-                ctx.fill();
+                    ctx.beginPath();
+                    ctx.moveTo(ox, -14);
+                    ctx.lineTo(ox - 5, -4);
+                    ctx.lineTo(ox + 5, -4);
+                    ctx.closePath();
+                    ctx.fillStyle = tint || THEME.weapon.lanceTip;
+                    ctx.fill();
+                }
 
-                ctx.restore();
-            }
-
-            function drawHudTwinIcon() {
-                ctx.save();
-                ctx.scale(0.65, 0.65);
-                drawTwinPowerUp();
                 ctx.restore();
             }
 
@@ -2761,9 +2865,17 @@
 
             function drawHarpoons() {
                 for (const harpoon of harpoons) {
-                    const yTop = lerp(harpoon.prevYTop, harpoon.yTop, renderAlpha);
+                    if (harpoon.stuck && harpoon.stickTimer < STICKY_HARPOON_FLICKER_AT) {
+                        const visible = Math.floor(harpoon.stickTimer * 10) % 2 === 0;
+                        if (!visible) continue;
+                    }
 
-                    ctx.strokeStyle = THEME.weapon.lanceShaft;
+                    const yTop = lerp(harpoon.prevYTop, harpoon.yTop, renderAlpha);
+                    const tint = harpoon.sticky ? THEME.weapon.stickyColor
+                        : harpoon.pierce ? THEME.weapon.pierceTip
+                        : null;
+
+                    ctx.strokeStyle = tint || THEME.weapon.lanceShaft;
                     ctx.lineWidth = 3;
                     ctx.beginPath();
                     ctx.moveTo(harpoon.x, harpoon.yBottom);
@@ -2775,7 +2887,7 @@
                     ctx.lineTo(harpoon.x - 5, yTop + 6);
                     ctx.lineTo(harpoon.x + 5, yTop + 6);
                     ctx.closePath();
-                    ctx.fillStyle = THEME.weapon.lanceTip;
+                    ctx.fillStyle = tint || THEME.weapon.lanceTip;
                     ctx.fill();
                 }
             }
@@ -3011,20 +3123,7 @@
                     ctx.fillStyle = "rgba(255,255,255,0.08)";
                     ctx.fill();
 
-                    if (powerUp.type === "twin") {
-                        drawTwinPowerUp();
-                    } else if (powerUp.type === "gun") {
-                        drawGunPowerUp();
-                    } else if (powerUp.type === "freeze") {
-                        drawFreezePowerUp();
-                    } else if (powerUp.type === "bomb") {
-                        drawBombPowerUp();
-                    }
-
-                    ctx.fillStyle = "#e2e8f0";
-                    ctx.font = "bold 11px system-ui, sans-serif";
-                    ctx.textAlign = "center";
-                    ctx.fillText(POWERUP_LABELS[powerUp.type] ?? powerUp.type.toUpperCase(), 0, 34);
+                    drawMysteryPickup(powerUp.anim || 0);
 
                     ctx.restore();
                 }
@@ -3032,29 +3131,32 @@
                 ctx.textAlign = "left";
             }
 
-            function drawTwinPowerUp() {
-                ctx.save();
+            // Every falling pickup looks identical - the player finds out
+            // what it is only on collection (see equipWeapon()/applyPowerUp(),
+            // which spawn the label popup + color-matched particle burst).
+            function drawMysteryPickup(anim) {
+                const pulse = 0.5 + 0.5 * Math.sin(anim * 2);
 
-                for (const side of [-1, 1]) {
-                    const ox = side * 10;
+                const grad = ctx.createRadialGradient(-4, -4, 2, 0, 0, 16);
+                grad.addColorStop(0, "#fefce8");
+                grad.addColorStop(0.5, `rgba(253,230,138,${0.55 + pulse * 0.25})`);
+                grad.addColorStop(1, "rgba(180,150,60,0.15)");
 
-                    ctx.strokeStyle = THEME.weapon.lanceShaft;
-                    ctx.lineWidth = 3;
-                    ctx.beginPath();
-                    ctx.moveTo(ox, 14);
-                    ctx.lineTo(ox, -8);
-                    ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(0, 0, 16, 0, Math.PI * 2);
+                ctx.fillStyle = grad;
+                ctx.fill();
 
-                    ctx.beginPath();
-                    ctx.moveTo(ox, -14);
-                    ctx.lineTo(ox - 5, -4);
-                    ctx.lineTo(ox + 5, -4);
-                    ctx.closePath();
-                    ctx.fillStyle = THEME.weapon.lanceTip;
-                    ctx.fill();
-                }
+                ctx.strokeStyle = `rgba(253,230,138,${0.6 + pulse * 0.4})`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
 
-                ctx.restore();
+                ctx.fillStyle = "#422006";
+                ctx.font = "bold 16px system-ui, sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("?", 0, 1);
+                ctx.textBaseline = "alphabetic";
             }
 
             function drawGunPowerUp() {
@@ -3133,48 +3235,6 @@
                 ctx.stroke();
             }
 
-            function drawBombPowerUp() {
-                // flask body
-                ctx.fillStyle = "#dc2626";
-                ctx.beginPath();
-                ctx.moveTo(-14, 16);
-                ctx.quadraticCurveTo(-24, 16, -20, 0);
-                ctx.quadraticCurveTo(-18, -10, -8, -14);
-                ctx.lineTo(-8, -20);
-                ctx.lineTo(8, -20);
-                ctx.lineTo(8, -14);
-                ctx.quadraticCurveTo(18, -10, 20, 0);
-                ctx.quadraticCurveTo(24, 16, 14, 16);
-                ctx.closePath();
-                ctx.fill();
-
-                ctx.lineWidth = 3;
-                ctx.strokeStyle = "#fecaca";
-                ctx.stroke();
-
-                // cork / neck
-                ctx.fillStyle = THEME.weapon.lanceShaft;
-                ctx.fillRect(-8, -25, 16, 6);
-
-                // fuse
-                ctx.strokeStyle = "#f59e0b";
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(0, -25);
-                ctx.quadraticCurveTo(8, -35, 16, -27);
-                ctx.stroke();
-
-                ctx.fillStyle = "#fde047";
-                ctx.beginPath();
-                ctx.arc(16, -27, 3, 0, Math.PI * 2);
-                ctx.fill();
-
-                ctx.fillStyle = "#fff7ed";
-                ctx.font = "bold 14px system-ui, sans-serif";
-                ctx.textAlign = "center";
-                ctx.fillText("!!", 0, 6);
-            }
-
             function drawHud() {
                 if (gameState !== "playing") return;
 
@@ -3226,12 +3286,18 @@
                     ctx.save();
                     ctx.translate(iconX, iconY);
 
-                    if (weaponType === "gun") {
+                    if (weaponType === "gun" || weaponType === "rapidGun") {
                         drawHudGunIcon();
                     } else if (weaponType === "twinHarpoon") {
-                        drawHudTwinIcon();
+                        drawHudLanceIcon(2, null);
+                    } else if (weaponType === "tripleHarpoon") {
+                        drawHudLanceIcon(3, null);
+                    } else if (weaponType === "pierceHarpoon") {
+                        drawHudLanceIcon(1, THEME.weapon.pierceTip);
+                    } else if (weaponType === "stickyHarpoon") {
+                        drawHudLanceIcon(1, THEME.weapon.stickyColor);
                     } else {
-                        drawHudHarpoonIcon();
+                        drawHudLanceIcon(1, null);
                     }
 
                     ctx.restore();
@@ -3294,19 +3360,6 @@
                 ctx.restore();
             }
 
-            function drawAudioStatus() {
-                if (gameState !== "playing") return;
-
-                const text = `P Pause · M Music ${musicMuted ? "Off" : "On"} · S SFX ${sfxMuted ? "Off" : "On"} · R Shake ${reduceMotion ? "Reduced" : "Full"} · C Contrast ${highContrastMode ? "High" : "Normal"} · G Aim ${aimAssist ? "Assist" : "Normal"} · T Timer ${timerAssist ? "Assist" : "Normal"}`;
-
-                ctx.save();
-                ctx.font = "bold 12px system-ui, sans-serif";
-                ctx.textAlign = "left";
-                ctx.fillStyle = THEME.hud.text;
-                ctx.fillText(text, BORDER, H);
-                ctx.restore();
-            }
-
             function drawFlash() {
                 if (flashTimer <= 0) return;
 
@@ -3332,7 +3385,7 @@
                 ctx.textAlign = "center";
                 ctx.font = "12px system-ui, sans-serif";
                 ctx.fillStyle = THEME.hud.text;
-                ctx.fillText("© Gloop Forge Games", W / 2, H);
+                ctx.fillText("© Gloop Forge Games", W / 2, H - BORDER - 4);
                 ctx.restore();
             }
 
