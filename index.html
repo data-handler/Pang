@@ -200,7 +200,9 @@
             // across every draw function.
             const THEME = {
                 knight: {
+                    armorHi: "#cbd5e1",
                     armor: "#94a3b8",
+                    armorLo: "#64748b",
                     trim: "#b45309",
                     helmet: "#cbd5e1",
                     plume: "#dc2626",
@@ -944,6 +946,8 @@
             let pops = [];
             let harpoons = [];
             let scorePopups = [];
+            let particles = [];
+            let footstepTimer = 0;
             let platforms = [];
             let hazardStrips = [];
             let powerUps = [];
@@ -1170,6 +1174,7 @@
                 powerUps = [];
                 pops = [];
                 scorePopups = [];
+                particles = [];
                 comboCallout = "";
                 comboCalloutTimer = 0;
 
@@ -1287,6 +1292,28 @@
                 }
             }
 
+            // Generic one-shot debris/dust particles (footstep dust, platform
+            // break chips, powerup pickup bursts) - separate from spawnSparkBurst
+            // since those are ball-pop specific and always the same color.
+            function spawnParticles(x, y, { count, radius, life, speed, color, gravity = 0 }) {
+                for (let i = 0; i < count; i++) {
+                    const lifeJitter = 0.75 + Math.random() * 0.5;
+                    particles.push({
+                        x,
+                        y,
+                        prevX: x,
+                        prevY: y,
+                        vx: (Math.random() - 0.5) * speed,
+                        vy: -Math.random() * speed * 0.6,
+                        gravity,
+                        r: radius * (0.75 + Math.random() * 0.5),
+                        life: life * lifeJitter,
+                        maxLife: life * lifeJitter,
+                        color
+                    });
+                }
+            }
+
             function maybeSpawnPowerUp(x, y) {
                 if (challengeType === "no_powerups") return;
                 if (Math.random() > POWERUP.spawnChance) return;
@@ -1353,9 +1380,19 @@
 
             function breakPlatform(platformIndex) {
                 const platform = platforms[platformIndex];
+                const cx = platform.x + platform.w / 2;
+                const cy = platform.y + platform.h / 2;
                 platforms.splice(platformIndex, 1);
                 score += 50;
-                spawnScore(platform.x + platform.w / 2, platform.y, 50);
+                spawnScore(cx, platform.y, 50);
+                spawnParticles(cx, cy, {
+                    count: 6,
+                    radius: 2.5,
+                    life: 0.4,
+                    speed: 160,
+                    gravity: 320,
+                    color: THEME.env.platformBreakEdge
+                });
             }
 
             function killPlayer() {
@@ -1673,6 +1710,24 @@
                 player.x += player.vx * dt;
                 player.x = clamp(player.x, player.w / 2, W - player.w / 2);
 
+                footstepTimer -= dt;
+                if (player.moving && footstepTimer <= 0 && !playerDead) {
+                    footstepTimer = 0.16;
+                    // drawPlayer() renders the knight at 1.5x scale around
+                    // (player.x, player.y), so the on-screen feet sit ~1.5x
+                    // further from player.y than the local sprite coordinates
+                    // (boots drawn around local y+30) - match that here so
+                    // dust spawns at the feet, not the waist.
+                    spawnParticles(player.x, player.y + 45, {
+                        count: 3,
+                        radius: 3.5,
+                        life: 0.5,
+                        speed: 16,
+                        gravity: 0,
+                        color: "rgba(212,209,204,0.85)"
+                    });
+                }
+
                 if (actionState.fire) {
                     fireWeapon();
                 }
@@ -1854,18 +1909,21 @@
                 if (powerUp.type === "twin") {
                     weaponType = "twinHarpoon";
                     spawnScore(powerUp.x, powerUp.y, POWERUP_LABELS.twin);
+                    spawnParticles(powerUp.x, powerUp.y, { count: 8, radius: 2.5, life: 0.35, speed: 200, color: THEME.weapon.lanceTip });
                     return;
                 }
 
                 if (powerUp.type === "gun") {
                     weaponType = "gun";
                     spawnScore(powerUp.x, powerUp.y, POWERUP_LABELS.gun);
+                    spawnParticles(powerUp.x, powerUp.y, { count: 8, radius: 2.5, life: 0.35, speed: 200, color: THEME.weapon.boltGlow });
                     return;
                 }
 
                 if (powerUp.type === "freeze") {
                     freezeTimer = POWERUP.freezeDuration;
                     spawnScore(powerUp.x, powerUp.y, POWERUP_LABELS.freeze);
+                    spawnParticles(powerUp.x, powerUp.y, { count: 8, radius: 2.5, life: 0.35, speed: 200, color: "#67e8f9" });
                 }
             }
 
@@ -2036,6 +2094,20 @@
                         scorePopups.splice(i, 1);
                     }
                 }
+
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    const p = particles[i];
+                    p.prevX = p.x;
+                    p.prevY = p.y;
+                    p.vy += p.gravity * dt;
+                    p.x += p.vx * dt;
+                    p.y += p.vy * dt;
+                    p.life -= dt;
+
+                    if (p.life <= 0) {
+                        particles.splice(i, 1);
+                    }
+                }
             }
 
             // --- draw ---
@@ -2050,6 +2122,9 @@
                     drawBackground();
                     drawFloor();
                 }
+                if (gameState === "playing" || gameState === "startup") {
+                    drawAmbientParticles(LEVELS[levelIndex].bg, last / 1000);
+                }
                 drawHazards();
                 drawPlatforms();
                 drawPlayer();
@@ -2059,6 +2134,7 @@
                 drawBallShadows();
                 drawBalls();
                 drawPops();
+                drawParticles();
                 drawScorePopups();
                 drawLevelClear();
                 drawPowerUps();
@@ -2196,6 +2272,43 @@
                 c.arc(x - canopyR * 0.6, groundY - height + canopyR * 0.4, canopyR * 0.7, 0, Math.PI * 2);
                 c.arc(x + canopyR * 0.6, groundY - height + canopyR * 0.4, canopyR * 0.7, 0, Math.PI * 2);
                 c.fill();
+            }
+
+            // Ambient atmosphere (fireflies at night, drifting pollen otherwise).
+            // Deliberately a pure function of elapsed time rather than mutable
+            // per-particle state, so it stays fully decoupled from the
+            // fixed-timestep simulation loop - purely cosmetic, drawn straight
+            // onto the live canvas (not cached in bgCache) so it animates.
+            function drawAmbientParticles(bg, seconds) {
+                if (highContrastMode) return;
+
+                ctx.save();
+
+                if (bg === "night") {
+                    ctx.fillStyle = "rgba(190,255,180,0.85)";
+                    for (let i = 0; i < 14; i++) {
+                        const seed = i * 137.5;
+                        const x = (Math.sin(seconds * 0.3 + seed) * 0.5 + 0.5) * W;
+                        const y = 60 + (Math.sin(seconds * 0.17 + seed * 1.3) * 0.5 + 0.5) * (FLOOR_Y - 140);
+                        const twinkle = Math.max(0, Math.sin(seconds * 2 + seed));
+                        ctx.globalAlpha = 0.3 + twinkle * 0.6;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                } else {
+                    ctx.fillStyle = "rgba(255,255,255,0.4)";
+                    for (let i = 0; i < 10; i++) {
+                        const seed = i * 91.7;
+                        const x = ((seconds * 12 + seed * 40) % (W + 40)) - 20;
+                        const y = 40 + (Math.sin(seconds * 0.4 + seed) * 0.5 + 0.5) * (FLOOR_Y - 100);
+                        ctx.beginPath();
+                        ctx.arc(x, y, 1.4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+
+                ctx.restore();
             }
 
             function drawBackground(c = ctx) {
@@ -2498,7 +2611,11 @@
                     const top = isSolid ? THEME.env.platformSolidHi : THEME.env.platformBreakHi;
                     const edge = isSolid ? THEME.env.platformSolidEdge : THEME.env.platformBreakEdge;
 
-                    ctx.fillStyle = fill;
+                    const platGrad = ctx.createLinearGradient(0, platform.y, 0, platform.y + platform.h);
+                    platGrad.addColorStop(0, top);
+                    platGrad.addColorStop(0.35, fill);
+                    platGrad.addColorStop(1, edge);
+                    ctx.fillStyle = platGrad;
                     ctx.fillRect(platform.x, platform.y, platform.w, platform.h);
 
                     ctx.fillStyle = top;
@@ -2551,7 +2668,11 @@
                 const bodyW = moving ? 14 : 16;
                 const bodyX = px - bodyW / 2;
 
-                ctx.fillStyle = k.armor;
+                const armorGrad = ctx.createLinearGradient(bodyX, py + 10, bodyX + bodyW, py + 28);
+                armorGrad.addColorStop(0, k.armorHi);
+                armorGrad.addColorStop(0.5, k.armor);
+                armorGrad.addColorStop(1, k.armorLo);
+                ctx.fillStyle = armorGrad;
                 ctx.fillRect(bodyX, py + 10, bodyW, 18);
 
                 ctx.fillStyle = k.trim;
@@ -2562,11 +2683,20 @@
                 ctx.arc(px, py + 6, 7, 0, Math.PI * 2);
                 ctx.fill();
 
-                ctx.fillStyle = k.helmet;
+                const helmetGrad = ctx.createRadialGradient(px - 3, py, 1, px, py + 3, 9);
+                helmetGrad.addColorStop(0, "#f1f5f9");
+                helmetGrad.addColorStop(0.5, k.helmet);
+                helmetGrad.addColorStop(1, k.armorLo);
+                ctx.fillStyle = helmetGrad;
                 ctx.beginPath();
                 ctx.arc(px, py + 3, 8, Math.PI, 0);
                 ctx.fill();
                 ctx.fillRect(px - 8, py - 1, 16, 4);
+
+                ctx.fillStyle = "rgba(255,255,255,0.7)";
+                ctx.beginPath();
+                ctx.ellipse(px - 3, py, 2, 1.2, -0.4, 0, Math.PI * 2);
+                ctx.fill();
 
                 ctx.fillStyle = k.plume;
                 ctx.beginPath();
@@ -2763,7 +2893,7 @@
                     if (pop.spark) {
                         ctx.beginPath();
                         ctx.arc(px, py, pop.r + (1 - t) * 1.5, 0, Math.PI * 2);
-                        ctx.fillStyle = `rgba(255,240,180,${t})`;
+                        ctx.fillStyle = `rgba(134,239,172,${t})`;
                         ctx.fill();
                     } else {
                         const rr = pop.r * (1.2 - t * 0.4);
@@ -2781,6 +2911,21 @@
                         ctx.stroke();
                     }
                 }
+            }
+
+            function drawParticles() {
+                for (const p of particles) {
+                    const t = Math.max(0, p.life / p.maxLife);
+                    const px = lerp(p.prevX, p.x, renderAlpha);
+                    const py = lerp(p.prevY, p.y, renderAlpha);
+
+                    ctx.globalAlpha = t;
+                    ctx.fillStyle = p.color;
+                    ctx.beginPath();
+                    ctx.arc(px, py, p.r * t, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1;
             }
 
             function drawScorePopups() {
