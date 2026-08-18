@@ -144,6 +144,7 @@
 
             let audioCtx = null;
             const sfxBuffers = {};
+            const _sfxLoadErrors = []; // visible in the ?diag=1 overlay
 
             function getAudioContext() {
                 if (!audioCtx) {
@@ -177,6 +178,8 @@
                         sfxBuffers[key] = await ctx.decodeAudioData(arrayBuffer);
                     } catch (err) {
                         // sfxBuffers[key] stays unset; playSound() no-ops for it
+                        const msg = `${key}: ${err && err.message ? err.message : err}`;
+                        _sfxLoadErrors.push(msg);
                         console.error(`Failed to load SFX "${key}" (${src}):`, err);
                     }
                 }));
@@ -3192,6 +3195,9 @@
                     `alpha    : ${renderAlpha.toFixed(3)}`,
                     `canvas   : ${canvas.width}×${canvas.height} px`,
                     `DPR      : ${dpr.toFixed(2)}  (device: ${(window.devicePixelRatio || 1).toFixed(2)})`,
+                    `AudioCtx : ${audioCtx ? audioCtx.state : "none"}`,
+                    `SFX bufs : ${Object.keys(sfxBuffers).length}/${Object.keys(SFX_SOURCES).length} loaded`,
+                    ..._sfxLoadErrors.map(e => `SFX ERR: ${e}`),
                 ];
 
                 ctx.save();
