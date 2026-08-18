@@ -126,14 +126,60 @@
             const startupActionText = isTouchDevice ? "TAP FIRE TO START" : "PRESS SPACE TO START";
             const restartActionText = isTouchDevice ? "Tap FIRE to Restart" : "Press Space to Restart";
 
-            const sounds = {
-                shoot: new Audio("sounds/shoot.wav"),
-                pop: new Audio("sounds/pop.wav"),
-                death: new Audio("sounds/death.wav"),
-                level: new Audio("sounds/level.wav"),
-                powerup: new Audio("sounds/powerup.wav"),
-                bomb: new Audio("sounds/bomb.wav")
+            // SFX use the Web Audio API rather than HTMLAudioElement: on iOS
+            // Safari, repeatedly calling HTMLAudioElement.play() (e.g. for
+            // rapid-fire shots/pops) does real synchronous main-thread work
+            // per call and was causing visible frame stalls. Buffers are
+            // decoded once up front; each trigger is a cheap
+            // AudioBufferSourceNode.start() with no media-session overhead,
+            // and overlapping triggers don't need pooling.
+            const SFX_SOURCES = {
+                shoot: "sounds/shoot.wav",
+                pop: "sounds/pop.wav",
+                death: "sounds/death.wav",
+                level: "sounds/level.wav",
+                powerup: "sounds/powerup.wav",
+                bomb: "sounds/bomb.wav"
             };
+
+            let audioCtx = null;
+            const sfxBuffers = {};
+
+            function getAudioContext() {
+                if (!audioCtx) {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    audioCtx = Ctx ? new Ctx() : null;
+                }
+                return audioCtx;
+            }
+
+            function unlockAudio() {
+                const ctx = getAudioContext();
+                if (ctx && ctx.state === "suspended") {
+                    ctx.resume().catch(() => { });
+                }
+            }
+
+            // iOS requires AudioContext creation/resume to happen inside a
+            // genuine user gesture, so hook the first one anywhere on the page.
+            const _unlockAudioOnce = () => unlockAudio();
+            addEventListener("keydown", _unlockAudioOnce, { once: true, capture: true });
+            addEventListener("pointerdown", _unlockAudioOnce, { once: true, capture: true });
+            addEventListener("touchstart", _unlockAudioOnce, { once: true, capture: true });
+
+            (async function loadSfxBuffers() {
+                const ctx = getAudioContext();
+                if (!ctx) return;
+                await Promise.all(Object.entries(SFX_SOURCES).map(async ([key, src]) => {
+                    try {
+                        const response = await fetch(src);
+                        const arrayBuffer = await response.arrayBuffer();
+                        sfxBuffers[key] = await ctx.decodeAudioData(arrayBuffer);
+                    } catch (err) {
+                        // sfxBuffers[key] stays unset; playSound() no-ops for it
+                    }
+                }));
+            })();
 
             const musicTracks = {
                 meadow: new Audio("music/meadow.ogg"),
@@ -1050,38 +1096,15 @@
                 return a + (b - a) * t;
             }
 
-            // Rapidly re-triggering the same shared <audio> element (resetting
-            // currentTime and calling play() again mid-combo) hitches on iOS
-            // Safari. Pool a few cloned instances per sound so overlapping
-            // triggers use a free instance instead of interrupting one another.
-            const SFX_POOL_SIZE = 4;
-            const soundPools = new Map();
-
-            function playSound(sound) {
+            function playSound(key) {
                 if (sfxMuted) return;
-
-                let pool = soundPools.get(sound);
-                if (!pool) {
-                    pool = [sound];
-                    soundPools.set(sound, pool);
-                }
-
-                let instance = pool.find(a => a.paused || a.ended);
-                if (!instance) {
-                    if (pool.length < SFX_POOL_SIZE) {
-                        instance = sound.cloneNode(true);
-                        pool.push(instance);
-                    } else {
-                        instance = pool[0];
-                        pool.push(pool.shift());
-                    }
-                }
-
-                instance.currentTime = 0;
-                const playAttempt = instance.play();
-                if (playAttempt && typeof playAttempt.catch === "function") {
-                    playAttempt.catch(() => { });
-                }
+                const ctx = audioCtx;
+                const buffer = sfxBuffers[key];
+                if (!ctx || !buffer) return;
+                const source = ctx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(ctx.destination);
+                source.start(0);
             }
 
             function resetWeaponState() {
@@ -1276,7 +1299,7 @@
                     hitStop: skipHitStop ? 0 : 0.02
                 });
 
-                playSound(sounds.pop);
+                playSound("pop");
                 spawnSparkBurst(ball.x, ball.y, 8, 2, 0.22, 340);
 
                 const points = 100 * comboCount;
@@ -1300,7 +1323,7 @@
             function killPlayer() {
                 if (playerDead) return;
 
-                playSound(sounds.death);
+                playSound("death");
                 triggerImpactFeedback({ flash: 0.2, shake: 0.24, strength: 14, hitStop: 0.05 });
                 playerDead = true;
                 deathTimer = DEATH_TIME;
@@ -1314,7 +1337,7 @@
                 comboCallout = "WAVE CLEAR";
                 comboCalloutTimer = 1.4;
 
-                playSound(sounds.level);
+                playSound("level");
 
                 const timeBonus = Math.ceil(timeLeft) * 10;
                 score += timeBonus;
@@ -1325,7 +1348,7 @@
                 if (weaponType === "gun") {
                     if (bulletCooldown > 0) return;
 
-                    playSound(sounds.shoot);
+                    playSound("shoot");
 
                     bullets.push({
                         x: player.x - PLAYER.shootOffsetX,
@@ -1346,7 +1369,7 @@
 
                 if (harpoons.length > 0) return;
 
-                playSound(sounds.shoot);
+                playSound("shoot");
 
                 if (weaponType === "twinHarpoon") {
                     harpoons.push(createHarpoon(clamp(player.x - PLAYER.twinHarpoonOffsetX, 6, W - 6)));
@@ -1374,7 +1397,7 @@
                 const newBalls = [];
 
                 for (const ball of balls) {
-                    playSound(sounds.pop);
+                    playSound("pop");
 
                     spawnPop(ball.x, ball.y, ball.r);
                     spawnSparkBurst(ball.x, ball.y, 12, 3, 0.25, 420);
@@ -1803,7 +1826,7 @@
             function applyPowerUp(powerUp) {
 
                 if (powerUp.type === "bomb") {
-                    playSound(sounds.bomb);
+                    playSound("bomb");
 
                     triggerBomb();
                     score += 200;
@@ -1813,7 +1836,7 @@
                 }
 
                 // normal powerups
-                playSound(sounds.powerup);
+                playSound("powerup");
 
                 if (powerUp.type === "twin") {
                     weaponType = "twinHarpoon";
