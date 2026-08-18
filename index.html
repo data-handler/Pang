@@ -945,10 +945,13 @@
             let _diagLastDt   = 0;
             let _diagSteps    = 0;
             // --------------------------------------------------------
-            // URL flag ?audio=off disables all audio for iOS stall testing
-            const _audioDisabled = new URLSearchParams(location.search).get("audio") === "off";
-            let musicMuted = _audioDisabled;
-            let sfxMuted = _audioDisabled;
+            // URL flags for iOS stall testing: ?audio=off disables both music
+            // and SFX; ?music=off / ?sfx=off isolate one or the other so we
+            // can tell which is actually responsible for the judder.
+            const _urlParams = new URLSearchParams(location.search);
+            const _audioDisabled = _urlParams.get("audio") === "off";
+            let musicMuted = _audioDisabled || _urlParams.get("music") === "off";
+            let sfxMuted = _audioDisabled || _urlParams.get("sfx") === "off";
             let paused = false;
             let reduceMotion = isTouchDevice || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
             let highContrastMode = false;
