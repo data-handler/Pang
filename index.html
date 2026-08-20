@@ -87,6 +87,14 @@
             font-size: 20px;
         }
 
+        .touch-btn.ad {
+            width: 68px;
+            height: 68px;
+            font-size: 15px;
+            border-color: rgba(253, 230, 138, 0.9);
+            background: rgba(120, 53, 15, 0.55);
+        }
+
         @media (pointer: coarse) {
             .touch-controls {
                 display: flex;
@@ -110,6 +118,9 @@
             <button class="touch-btn" id="touchRight" aria-label="Move right">▶</button>
         </div>
         <div class="touch-cluster">
+            <button class="touch-btn ad" id="touchAd" aria-label="Watch ad to continue" style="display:none">AD</button>
+        </div>
+        <div class="touch-cluster">
             <button class="touch-btn fire" id="touchFire" aria-label="Fire">FIRE</button>
         </div>
     </div>
@@ -119,6 +130,7 @@
             const canvas = document.getElementById("c");
             const ctx = canvas.getContext("2d");
             const hintEl = document.querySelector(".hint");
+            const touchAdButton = document.getElementById("touchAd");
             const touchButtons = {
                 left: document.getElementById("touchLeft"),
                 right: document.getElementById("touchRight"),
@@ -127,6 +139,7 @@
             const isTouchDevice = window.matchMedia("(pointer: coarse)").matches || (navigator.maxTouchPoints || 0) > 0;
             const startupActionText = isTouchDevice ? "TAP FIRE TO START" : "PRESS SPACE TO START";
             const restartActionText = isTouchDevice ? "Tap FIRE to Restart" : "Press Space to Restart";
+            const continueActionText = isTouchDevice ? "Tap AD to Continue" : "Press V to Continue (Watch Ad)";
 
             // SFX use the Web Audio API rather than HTMLAudioElement: on iOS
             // Safari, repeatedly calling HTMLAudioElement.play() (e.g. for
@@ -202,6 +215,37 @@
                 if (crazySdkReady) window.CrazyGames.SDK.game.gameplayStop();
             }
             notifyLoadingStart();
+
+            // Rewarded-ad "continue" on game over - opt-in, and only offered
+            // when the SDK is actually available (crazySdkReady false on
+            // self-host/itch.io/etc, where the normal restart is the only
+            // option). Continuing reuses the exact same fresh-level reload as
+            // a normal mid-run respawn, just with the run's score/level kept
+            // instead of a full restart from level 1.
+            let adInProgress = false;
+
+            function requestContinueAd() {
+                if (!crazySdkReady || adInProgress || gameState !== "gameover") return;
+                if (!window.CrazyGames?.SDK?.ad) return;
+                adInProgress = true;
+                window.CrazyGames.SDK.ad.requestAd("rewarded", {
+                    adStarted: () => { },
+                    adFinished: () => {
+                        adInProgress = false;
+                        continueRun();
+                    },
+                    adError: () => {
+                        adInProgress = false;
+                    }
+                });
+            }
+
+            function continueRun() {
+                lives = 1;
+                resetLevel();
+                gameState = "playing";
+                notifyGameplayStart();
+            }
 
             (async function loadSfxBuffers() {
                 const ctx = getAudioContext();
@@ -892,6 +936,11 @@
 
                 if (e.code === "KeyT") {
                     timerAssist = !timerAssist;
+                    return;
+                }
+
+                if (e.code === "KeyV" && gameState === "gameover") {
+                    requestContinueAd();
                     return;
                 }
 
@@ -2452,6 +2501,9 @@
                 // any pixel-level coordination between a fixed-position HTML
                 // element and the dynamically-scaled canvas beneath it.
                 hintEl.style.display = gameState === "playing" ? "" : "none";
+                if (touchAdButton) {
+                    touchAdButton.style.display = gameState === "gameover" && crazySdkReady ? "" : "none";
+                }
 
                 ctx.save();
 
@@ -3097,6 +3149,12 @@
                     ctx.font = "24px system-ui, sans-serif";
                     ctx.fillText(`Your Score: ${score}`, W / 2, 95);
                     ctx.fillText(`Level Reached: ${levelIndex + 1}`, W / 2, 125);
+
+                    if (crazySdkReady) {
+                        ctx.font = "bold 22px system-ui, sans-serif";
+                        ctx.fillStyle = "#fde68a";
+                        ctx.fillText(adInProgress ? "Loading ad..." : continueActionText, W / 2, 170);
+                    }
 
                     ctx.font = "22px system-ui, sans-serif";
                     ctx.fillStyle = "#ffffff";
@@ -4184,6 +4242,11 @@
             bindTouchControl(touchButtons.left, "left");
             bindTouchControl(touchButtons.right, "right");
             bindTouchControl(touchButtons.fire, "fire");
+
+            touchAdButton?.addEventListener("pointerdown", (event) => {
+                event.preventDefault();
+                requestContinueAd();
+            });
 
             let lastTouchStart = 0;
             addEventListener("touchstart", (event) => {
