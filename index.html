@@ -200,6 +200,19 @@
                 } catch {
                     crazySdkReady = false;
                 }
+
+                // The platform's own mute (site-wide toggle, or during ad
+                // playback) must be respected regardless of the player's
+                // local M/S toggles - read the starting value, then stay in
+                // sync with any change for the rest of the session.
+                if (crazySdkReady) {
+                    try {
+                        applyPlatformMute(!!window.CrazyGames.SDK.game.settings?.muteAudio);
+                        window.CrazyGames.SDK.game.addSettingsChangeListener((newSettings) => {
+                            applyPlatformMute(!!newSettings.muteAudio);
+                        });
+                    } catch { }
+                }
             })();
 
             function notifyLoadingStart() {
@@ -229,13 +242,17 @@
                 if (!window.CrazyGames?.SDK?.ad) return;
                 adInProgress = true;
                 window.CrazyGames.SDK.ad.requestAd("rewarded", {
-                    adStarted: () => { },
+                    adStarted: () => {
+                        applyPlatformMute(undefined, true);
+                    },
                     adFinished: () => {
                         adInProgress = false;
+                        applyPlatformMute(undefined, false);
                         continueRun();
                     },
                     adError: () => {
                         adInProgress = false;
+                        applyPlatformMute(undefined, false);
                     }
                 });
             }
@@ -904,12 +921,7 @@
 
                 if (e.code === "KeyM") {
                     musicMuted = !musicMuted;
-                    for (const track of Object.values(musicTracks)) {
-                        track.muted = musicMuted;
-                    }
-                    if (!musicMuted && currentMusicTrack && currentMusicTrack.paused) {
-                        currentMusicTrack.play().catch(() => { });
-                    }
+                    applyMusicMuteState();
                     return;
                 }
 
@@ -1110,6 +1122,34 @@
 
             let musicMuted = false;
             let sfxMuted = false;
+            // Two independent reasons the platform can force silence, kept
+            // separate so an ad ending doesn't wrongly re-enable audio the
+            // player (or CrazyGames' own site-wide toggle) had muted for a
+            // different, still-active reason.
+            let platformSettingMuted = false;
+            let adPlaybackMuted = false;
+            let platformMuted = false;
+
+            function applyMusicMuteState() {
+                const effectiveMuted = musicMuted || platformMuted;
+                for (const track of Object.values(musicTracks)) {
+                    track.muted = effectiveMuted;
+                }
+                if (!effectiveMuted && currentMusicTrack && currentMusicTrack.paused) {
+                    currentMusicTrack.play().catch(() => { });
+                }
+            }
+
+            // The player's local M/S toggles must never override this - both
+            // callers just report their own on/off state, and the two are
+            // OR'd together here so either one alone is enough to mute.
+            function applyPlatformMute(setting, adPlayback) {
+                if (setting !== undefined) platformSettingMuted = setting;
+                if (adPlayback !== undefined) adPlaybackMuted = adPlayback;
+                platformMuted = platformSettingMuted || adPlaybackMuted;
+                applyMusicMuteState();
+            }
+
             let paused = false;
             let reduceMotion = isTouchDevice || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
             let highContrastMode = false;
@@ -1195,7 +1235,7 @@
             }
 
             function playSound(key, volume = 1) {
-                if (sfxMuted) return;
+                if (sfxMuted || platformMuted) return;
                 const ctx = audioCtx;
                 const buffer = sfxBuffers[key];
                 if (!ctx || !buffer) return;
@@ -1320,7 +1360,7 @@
                 }
 
                 currentMusicTrack = track;
-                if (musicMuted) return;
+                if (musicMuted || platformMuted) return;
 
                 // Defer play() to a separate task. loadLevel() (and this call)
                 // can run synchronously inside tick()'s fixed-step simulation
