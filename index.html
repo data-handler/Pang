@@ -4,7 +4,8 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <title>Slime Siege</title>
+    <title>Eyes on Stalks</title>
+    <script src="https://sdk.crazygames.com/crazygames-sdk-v2.js"></script>
     <style>
         html,
         body {
@@ -140,7 +141,9 @@
                 death: "sounds/death.wav",
                 level: "sounds/level.wav",
                 powerup: "sounds/powerup.wav",
-                bomb: "sounds/bomb.wav"
+                bomb: "sounds/bomb.wav",
+                uhoh: "sounds/uhoh.mp3",
+                gallop: "sounds/gallop.mp3"
             };
 
             let audioCtx = null;
@@ -168,6 +171,38 @@
             addEventListener("pointerdown", _unlockAudioOnce, { once: true, capture: true });
             addEventListener("touchstart", _unlockAudioOnce, { once: true, capture: true });
 
+            // CrazyGames platform integration. The SDK throws on any domain
+            // that isn't localhost or a crazygames.com domain ("disabled"
+            // mode) - self-host/itch.io/etc must not call it at all, so every
+            // call goes through this gate. crazySdkReady starts false and the
+            // check below flips it once we know we're somewhere safe; calls
+            // made before that (unlikely - it resolves near-instantly) just
+            // no-op rather than queueing, since none of these events are
+            // meaningful to replay after the fact.
+            let crazySdkReady = false;
+            (async function initCrazyGamesSdk() {
+                try {
+                    const env = await window.CrazyGames?.SDK?.getEnvironment();
+                    crazySdkReady = env === "local" || env === "crazygames";
+                } catch {
+                    crazySdkReady = false;
+                }
+            })();
+
+            function notifyLoadingStart() {
+                if (crazySdkReady) window.CrazyGames.SDK.game.sdkGameLoadingStart();
+            }
+            function notifyLoadingStop() {
+                if (crazySdkReady) window.CrazyGames.SDK.game.sdkGameLoadingStop();
+            }
+            function notifyGameplayStart() {
+                if (crazySdkReady) window.CrazyGames.SDK.game.gameplayStart();
+            }
+            function notifyGameplayStop() {
+                if (crazySdkReady) window.CrazyGames.SDK.game.gameplayStop();
+            }
+            notifyLoadingStart();
+
             (async function loadSfxBuffers() {
                 const ctx = getAudioContext();
                 if (!ctx) return;
@@ -184,7 +219,7 @@
             })();
 
             const musicTracks = {
-                meadow: new Audio("music/meadow.ogg"),
+                meadow: new Audio("music/meadow.mp3"),
                 sunset: new Audio("music/sunset.mp3"),
                 night: new Audio("music/night.mp3")
             };
@@ -196,7 +231,7 @@
 
             // --- constants ---
 
-            // Slime Siege palette. Centralized here so the forest/knight/slime
+            // Eyes on Stalks palette. Centralized here so the forest/knight/eye
             // theme has one source of truth instead of hex literals scattered
             // across every draw function.
             const THEME = {
@@ -217,14 +252,14 @@
                     boltCore: "#c084fc",
                     boltGlow: "#e9d5ff",
                     pierceTip: "#4ade80",
-                    stickyColor: "#fde68a"
+                    stickyColor: "#fde68a",
+                    rapidTint: "#22d3ee",
+                    flaskLiquid: "#f97316"
                 },
                 slimeTiers: ["#14b8a6", "#22c55e", "#4ade80", "#86efac"],
                 slime: {
                     highlight: "#f0fdf4",
                     shadow: "#14532d",
-                    outline: "#166534",
-                    eyeWhite: "#fefce8",
                     eyePupil: "#052e16"
                 },
                 env: {
@@ -239,7 +274,10 @@
                     platformSolidEdge: "#44403c",
                     platformBreak: "#92400e",
                     platformBreakHi: "#d97706",
-                    platformBreakEdge: "#78350f"
+                    platformBreakEdge: "#78350f",
+                    platformReinforced: "#64748b",
+                    platformReinforcedHi: "#94a3b8",
+                    platformReinforcedEdge: "#334155"
                 },
                 hud: {
                     frameOuter: "#166534",
@@ -256,6 +294,9 @@
             const H = WORLD_H;
             const FLOOR_Y = H - 40;
             const GRAVITY = 980;
+            const PARALLAX_MARGIN = 36;
+            const PARALLAX_FAR_STRENGTH = 0.015;
+            const PARALLAX_NEAR_STRENGTH = 0.07;
             const POP_DURATION = 0.28;
             const BORDER = 14;
             const FIXED_DT = 1 / 120;
@@ -302,8 +343,22 @@
                 life: 10,
                 fallSpeed: 70,
                 groundY: FLOOR_Y - 10,
-                freezeDuration: 6
+                freezeDuration: 6,
+                horseDuration: 10,
+                horseSpeedMultiplier: 1.6
             };
+
+            // A rare, harmless bonus creature (like Space Invaders' UFO) that
+            // drifts across the top of the screen and rewards a well-aimed shot.
+            // Rolled on a timer rather than once per level, so it can show up
+            // at any point mid-level instead of only at a fixed moment.
+            const BONUS_ENTITY_CHECK_INTERVAL = 4;
+            const BONUS_ENTITY_SPAWN_CHANCE = 0.02;
+            const BONUS_ENTITY_SPEED = 110;
+            const BONUS_ENTITY_DASH_SPEED_MULT = 2.4;
+            const BONUS_ENTITY_LIFETIME = 9;
+            const BONUS_ENTITY_RADIUS = 18;
+            const BONUS_ENTITY_SCORE = 750;
 
             const BULLET = {
                 speedY: -700,
@@ -349,6 +404,10 @@
             const BALL_VX = [120, 145, 170, 195];
             const BALL_BOUNCE_VY = [720, 670, 620, 570];
             const SMALLEST_BALL_SIZE = BALL_SIZES.length - 1;
+
+            const BLINK_DURATION = 0.12;
+            const BLINK_MIN_GAP = 2;
+            const BLINK_GAP_RANGE = 4;
 
             const LEVELS = [
                 {
@@ -445,7 +504,7 @@
                 },
                 {
                     name: "Twin Towers",
-                    bg: "meadow",
+                    bg: "cliffs",
                     balls: [
                         { size: 1, x: 150, y: 100, dir: 1 },
                         { size: 3, x: 450, y: 140, dir: 1 },
@@ -482,7 +541,7 @@
                 },
                 {
                     name: "Boxed In",
-                    bg: "meadow",
+                    bg: "cliffs",
                     balls: [
                         { size: 2, x: 240, y: 100, dir: 1 },
                         { size: 2, x: 660, y: 100, dir: -1 }
@@ -521,7 +580,7 @@
                 },
                 {
                     name: "Final Mix",
-                    bg: "sunset",
+                    bg: "cliffs",
                     balls: [
                         { size: 1, x: 140, y: 110, dir: 1 },
                         { size: 2, x: 320, y: 150, dir: -1 },
@@ -575,7 +634,7 @@
                 },
                 {
                     name: "Middle Maze",
-                    bg: "meadow",
+                    bg: "cave",
                     balls: [
                         { size: 1, x: 170, y: 90, dir: 1 },
                         { size: 2, x: 450, y: 150, dir: 1 },
@@ -583,7 +642,7 @@
                     ],
                     platforms: [
                         { x: 120, y: 220, w: 180, h: 16, type: "solid" },
-                        { x: 360, y: 280, w: 180, h: 16, type: "breakable" },
+                        { x: 360, y: 280, w: 180, h: 16, type: "breakable", hp: 2 },
                         { x: 600, y: 220, w: 180, h: 16, type: "solid" }
                     ]
                 },
@@ -610,7 +669,7 @@
                 },
                 {
                     name: "Break and Run",
-                    bg: "meadow",
+                    bg: "cave",
                     balls: [
                         { size: 0, x: 450, y: 90, dir: 1 },
                         { size: 2, x: 220, y: 140, dir: 1 },
@@ -618,7 +677,7 @@
                     ],
                     platforms: [
                         { x: 180, y: 220, w: 180, h: 16, type: "breakable" },
-                        { x: 540, y: 220, w: 180, h: 16, type: "breakable" }
+                        { x: 540, y: 220, w: 180, h: 16, type: "breakable", hp: 2 }
                     ]
                 },
                 {
@@ -651,7 +710,7 @@
                 },
                 {
                     name: "Arcade Panic",
-                    bg: "night",
+                    bg: "cave",
                     balls: [
                         { size: 1, x: 160, y: 90, dir: 1 },
                         { size: 2, x: 300, y: 130, dir: -1 },
@@ -684,7 +743,7 @@
                 },
                 {
                     name: "Hazard Circuit",
-                    bg: "night",
+                    bg: "volcanic",
                     challenge: "survive",
                     balls: [
                         { size: 2, x: 220, y: 110, dir: 1 },
@@ -702,7 +761,7 @@
                 },
                 {
                     name: "Ghost Gate",
-                    bg: "meadow",
+                    bg: "volcanic",
                     challenge: "no_powerups",
                     balls: [
                         { size: 1, x: 200, y: 100, dir: 1 },
@@ -716,7 +775,7 @@
                 },
                 {
                     name: "Storm Channels",
-                    bg: "sunset",
+                    bg: "volcanic",
                     challenge: "score_attack",
                     balls: [
                         { size: 0, x: 160, y: 90, dir: 1 },
@@ -733,7 +792,7 @@
                 },
                 {
                     name: "Final Relay",
-                    bg: "night",
+                    bg: "volcanic",
                     challenge: "survive",
                     balls: [
                         { size: 1, x: 160, y: 100, dir: 1 },
@@ -760,6 +819,16 @@
                 [520, 95], [610, 60], [730, 120], [810, 75]
             ];
 
+            const CAVE_CRYSTAL_GLINTS = [
+                [60, 150], [140, 90], [250, 180], [380, 100], [470, 200],
+                [600, 130], [700, 190], [790, 110], [850, 160]
+            ];
+
+            const VOLCANIC_LAVA_CRACKS = [
+                [100, 460, 140, 410], [280, 470, 320, 400],
+                [460, 465, 500, 415], [650, 470, 690, 420]
+            ];
+
             const ACTION_KEYS = {
                 left: new Set(["ArrowLeft", "KeyA"]),
                 right: new Set(["ArrowRight", "KeyD"]),
@@ -780,63 +849,12 @@
             };
 
             addEventListener("keydown", (e) => {
-                if (gameState === "gameover" && enteringScore) {
-                    if (e.code === "Tab") {
-                        e.preventDefault();
-                        initialsIndex = (initialsIndex + (e.shiftKey ? 2 : 1)) % 3;
-                        return;
-                    }
-
-                    if (e.code === "Backspace") {
-                        e.preventDefault();
-                        initials[initialsIndex] = "A";
-                        if (initialsIndex > 0) initialsIndex--;
-                        return;
-                    }
-
-                    if (e.code === "ArrowLeft") {
-                        e.preventDefault();
-                        initialsIndex = Math.max(0, initialsIndex - 1);
-                        return;
-                    }
-
-                    if (e.code === "ArrowRight") {
-                        e.preventDefault();
-                        initialsIndex = Math.min(2, initialsIndex + 1);
-                        return;
-                    }
-
-                    if (e.code === "ArrowUp") {
-                        e.preventDefault();
-                        const c = initials[initialsIndex].charCodeAt(0);
-                        initials[initialsIndex] = c >= 90 ? "A" : String.fromCharCode(c + 1);
-                        return;
-                    }
-
-                    if (e.code === "ArrowDown") {
-                        e.preventDefault();
-                        const c = initials[initialsIndex].charCodeAt(0);
-                        initials[initialsIndex] = c <= 65 ? "Z" : String.fromCharCode(c - 1);
-                        return;
-                    }
-
-                    if (/^[a-zA-Z]$/.test(e.key)) {
-                        e.preventDefault();
-                        initials[initialsIndex] = e.key.toUpperCase();
-                        if (initialsIndex < 2) initialsIndex++;
-                        return;
-                    }
-
-                    if (e.code === "Enter" || e.code === "Space") {
-                        e.preventDefault();
-                        submitScore();
-                        enteringScore = false;
-                        return;
-                    }
-                }
-
                 if (e.code === "KeyP") {
                     paused = !paused;
+                    if (gameState === "playing") {
+                        if (paused) notifyGameplayStop();
+                        else notifyGameplayStart();
+                    }
                     return;
                 }
 
@@ -979,7 +997,8 @@
                     prevY: y,
                     vx: BALL_VX[size] * dir,
                     vy,
-                    squash: 0
+                    squash: 0,
+                    blinkTimer: 1.5 + Math.random() * 3.5
                 };
             }
 
@@ -992,9 +1011,10 @@
             let footstepTimer = 0;
             let platforms = [];
             let hazardStrips = [];
+            let bonusEntity = null;
+            let bonusEntitySpawnTimer = BONUS_ENTITY_CHECK_INTERVAL;
             let powerUps = [];
             let bullets = [];
-            let highScores = [];
 
             let gameState = "startup";
             let startupBlinkTimer = 0;
@@ -1027,9 +1047,12 @@
             let shakeTimer = 0;
             let shakeStrength = 0;
             let freezeTimer = 0;
+            let horseTimer = 0;
             let hitStopTimer = 0;
 
-            let bgCache = null;
+            let bgFarCache = null;
+            let bgNearCache = null;
+            let bgFloorCache = null;
 
             let last = performance.now();
             let accumulator = 0;
@@ -1047,12 +1070,6 @@
             let challengeType = null;
             let surviveTimer = 0;
             let selectedLoadoutIndex = 0;
-
-            let sessionToken = null;
-            let enteringScore = false;
-            let initials = ["A", "A", "A"];
-            let initialsIndex = 0;
-            let scoreSubmitted = false;
 
             const LOADOUTS = [
                 { name: "Balanced", playerSpeed: PLAYER.speed, harpoonSpeed: 900, cooldownFactor: 1 },
@@ -1120,53 +1137,6 @@
                 bulletCooldownFactor = loadout.cooldownFactor;
             }
 
-            // Local high-score board (localStorage). No backend to talk to -
-            // this is what CrazyGames' Leaderboards SDK will replace once
-            // the game is integrated into the platform.
-            const HIGH_SCORE_KEY = "slimeSiegeHighScores";
-
-            async function loadHighScores() {
-                try {
-                    const raw = localStorage.getItem(HIGH_SCORE_KEY);
-                    highScores = raw ? JSON.parse(raw) : [];
-                } catch {
-                    highScores = [];
-                }
-            }
-
-            async function startScoreSession() {
-                sessionToken = "local";
-            }
-
-            async function submitScore() {
-                if (!sessionToken || scoreSubmitted) return;
-
-                highScores.push({
-                    initials: initials.join(""),
-                    points: score,
-                    level: levelIndex + 1
-                });
-                highScores.sort((a, b) => b.points - a.points || b.level - a.level);
-                highScores = highScores.slice(0, 10);
-
-                try {
-                    localStorage.setItem(HIGH_SCORE_KEY, JSON.stringify(highScores));
-                } catch {
-                    // storage unavailable (private mode, quota) - keep the in-memory list
-                }
-                scoreSubmitted = true;
-            }
-
-            function qualifiesForHighScore() {
-                if (highScores.length < 10) return true;
-
-                const last = highScores[highScores.length - 1];
-                const lastPoints = last.points ?? 0;
-                const lastLevel = last.level ?? 0;
-
-                return score > lastPoints || (score === lastPoints && (levelIndex + 1) > lastLevel);
-            }
-
             function clamp(value, min, max) {
                 return Math.max(min, Math.min(max, value));
             }
@@ -1175,14 +1145,21 @@
                 return a + (b - a) * t;
             }
 
-            function playSound(key) {
+            function playSound(key, volume = 1) {
                 if (sfxMuted) return;
                 const ctx = audioCtx;
                 const buffer = sfxBuffers[key];
                 if (!ctx || !buffer) return;
                 const source = ctx.createBufferSource();
                 source.buffer = buffer;
-                source.connect(ctx.destination);
+                if (volume === 1) {
+                    source.connect(ctx.destination);
+                } else {
+                    const gain = ctx.createGain();
+                    gain.gain.value = volume;
+                    source.connect(gain);
+                    gain.connect(ctx.destination);
+                }
                 source.start(0);
             }
 
@@ -1210,6 +1187,7 @@
                 applySelectedLoadout();
                 resetWeaponState();
                 freezeTimer = 0;
+                horseTimer = 0;
                 gameState = "playing";
             }
 
@@ -1232,11 +1210,14 @@
                 levelClearTimer = 0;
                 timeLeft = levelTimeBudget;
                 freezeTimer = 0;
+                horseTimer = 0;
                 // Balls reset to their level-start positions on every respawn too,
                 // and several levels spawn one right above the player's fixed
                 // spawn point - without a grace window a respawn could walk
                 // straight into a ball that's already falling through center.
                 invulnTimer = RESPAWN_INVULN_TIME;
+                bonusEntity = null;
+                bonusEntitySpawnTimer = BONUS_ENTITY_CHECK_INTERVAL;
             }
 
             function hitsToClearBall(size) {
@@ -1255,25 +1236,32 @@
                 return seconds * TIME_DRAIN_PER_SECOND;
             }
 
-            async function startGame() {
-                await startScoreSession();
-
-                enteringScore = false;
-                initials = ["A", "A", "A"];
-                initialsIndex = 0;
-                scoreSubmitted = false;
-
+            function startGame() {
                 resetRunState();
                 loadLevel(levelIndex);
+                notifyGameplayStart();
             }
 
             function resetLevel() {
                 loadLevel(levelIndex);
             }
 
+            // The 3 new scenes (cliffs/cave/volcanic) don't have their own
+            // music tracks, so each reuses whichever existing track fits its
+            // mood, instead of leaving currentMusicTrack undefined and
+            // crashing on the next .play() call.
+            const MUSIC_TRACK_FOR_BG = {
+                meadow: "meadow",
+                sunset: "sunset",
+                night: "night",
+                cliffs: "meadow",
+                cave: "night",
+                volcanic: "sunset"
+            };
+
             function playLevelMusic() {
                 const bg = LEVELS[levelIndex].bg;
-                const track = musicTracks[bg];
+                const track = musicTracks[MUSIC_TRACK_FOR_BG[bg] ?? "meadow"];
 
                 if (currentMusicTrack === track) return;
 
@@ -1301,7 +1289,11 @@
                     baseX: platform.x,
                     baseY: platform.y,
                     movePhase: platform.move?.phase ?? Math.random() * Math.PI * 2,
-                    active: true
+                    active: true,
+                    cracked: false,
+                    // hp counts down as it's hit; reinforced stays fixed so the
+                    // stone look doesn't revert once hp drops to 1 after a crack.
+                    reinforced: (platform.hp ?? 1) > 1
                 }));
             }
 
@@ -1400,7 +1392,8 @@
                 { type: "pierceHarpoon", weight: 12 },
                 { type: "tripleHarpoon", weight: 8 },
                 { type: "rapidGun", weight: 7 },
-                { type: "stickyHarpoon", weight: 5 }
+                { type: "stickyHarpoon", weight: 5 },
+                { type: "horse", weight: 10 }
             ];
 
             function maybeSpawnPowerUp(x, y, chance = POWERUP.spawnChance) {
@@ -1419,6 +1412,79 @@
                     life: POWERUP.life,
                     anim: Math.random() * Math.PI * 2
                 });
+            }
+
+            function trySpawnBonusEntity(dt) {
+                if (bonusEntity || levelClear || challengeType === "no_powerups") return;
+
+                bonusEntitySpawnTimer -= dt;
+                if (bonusEntitySpawnTimer > 0) return;
+                bonusEntitySpawnTimer = BONUS_ENTITY_CHECK_INTERVAL;
+
+                if (Math.random() > BONUS_ENTITY_SPAWN_CHANCE) return;
+
+                const fromLeft = Math.random() < 0.5;
+                const startX = fromLeft ? -BONUS_ENTITY_RADIUS : W + BONUS_ENTITY_RADIUS;
+                const startY = 60 + Math.random() * 70;
+
+                bonusEntity = {
+                    x: startX,
+                    y: startY,
+                    prevX: startX,
+                    prevY: startY,
+                    baseY: startY,
+                    dir: fromLeft ? 1 : -1,
+                    t: 0,
+                    dashTimer: 1 + Math.random() * 1.5,
+                    sparkleTimer: 0,
+                    life: BONUS_ENTITY_LIFETIME
+                };
+            }
+
+            function updateBonusEntity(dt) {
+                if (!bonusEntity) return;
+                const e = bonusEntity;
+                e.prevX = e.x;
+                e.prevY = e.y;
+                e.t += dt;
+                e.life -= dt;
+
+                // Sine-wave drift plus the occasional short speed burst, so it
+                // doesn't just fly a straight UFO line across the screen.
+                let speed = BONUS_ENTITY_SPEED;
+                e.dashTimer -= dt;
+                if (e.dashTimer <= 0) {
+                    speed *= BONUS_ENTITY_DASH_SPEED_MULT;
+                    if (e.dashTimer < -0.3) {
+                        e.dashTimer = 1 + Math.random() * 1.8;
+                    }
+                }
+
+                e.x += e.dir * speed * dt;
+                e.y = e.baseY + Math.sin(e.t * 3) * 26;
+
+                e.sparkleTimer -= dt;
+                if (e.sparkleTimer <= 0) {
+                    e.sparkleTimer = 0.07;
+                    spawnParticles(e.x, e.y, { count: 1, radius: 1.8, life: 0.35, speed: 25, gravity: 0, color: "#fde68a" });
+                }
+
+                const offscreen = e.dir > 0 ? e.x > W + BONUS_ENTITY_RADIUS : e.x < -BONUS_ENTITY_RADIUS;
+                if (offscreen || e.life <= 0) {
+                    bonusEntity = null;
+                }
+            }
+
+            function popBonusEntity() {
+                const e = bonusEntity;
+                score += BONUS_ENTITY_SCORE;
+                playSound("powerup");
+                spawnScore(e.x, e.y, BONUS_ENTITY_SCORE);
+                spawnParticles(e.x, e.y, { count: 20, radius: 3, life: 0.5, speed: 260, gravity: 200, color: "#fde68a" });
+                comboCallout = "BONUS EYE!";
+                comboCalloutTimer = 1.4;
+                maybeSpawnPowerUp(e.x, e.y, 1);
+                bonusEntity = null;
             }
 
             function splitBall(ball) {
@@ -1479,6 +1545,33 @@
                 maybeSpawnPowerUp(cx, platform.y, POWERUP.platformSpawnChance);
             }
 
+            // Reinforced platforms (hp > 1 in level data) take an extra hit
+            // before breaking - first hit just cracks it (visual only), the
+            // last hit breaks it exactly like a normal breakable platform.
+            function hitBreakablePlatform(platformIndex) {
+                const platform = platforms[platformIndex];
+                const hp = platform.hp ?? 1;
+
+                if (hp > 1) {
+                    platform.hp = hp - 1;
+                    platform.cracked = true;
+                    const cx = platform.x + platform.w / 2;
+                    const cy = platform.y + platform.h / 2;
+                    playSound("pop");
+                    spawnParticles(cx, cy, {
+                        count: 4,
+                        radius: 2,
+                        life: 0.3,
+                        speed: 100,
+                        gravity: 260,
+                        color: THEME.env.platformReinforcedEdge
+                    });
+                    return;
+                }
+
+                breakPlatform(platformIndex);
+            }
+
             function killPlayer() {
                 if (playerDead) return;
 
@@ -1493,8 +1586,6 @@
             function startLevelClear() {
                 levelClear = true;
                 levelClearTimer = LEVEL_CLEAR_TIME;
-                comboCallout = "WAVE CLEAR";
-                comboCalloutTimer = 1.4;
 
                 playSound("level");
 
@@ -1633,8 +1724,8 @@
             }
 
             function getWeaponLabel() {
-                if (weaponType === "gun") return "Wand";
-                if (weaponType === "rapidGun") return "Rapid Wand";
+                if (weaponType === "gun") return "Blaster";
+                if (weaponType === "rapidGun") return "Rapid Blaster";
                 if (weaponType === "twinHarpoon") return "Twin Lance";
                 if (weaponType === "tripleHarpoon") return "Triple Lance";
                 if (weaponType === "pierceHarpoon") return "Piercing Lance";
@@ -1644,13 +1735,14 @@
 
             const POWERUP_LABELS = {
                 twin: "TWIN",
-                gun: "WAND",
+                gun: "BLASTER",
                 pierceHarpoon: "PIERCE",
                 tripleHarpoon: "TRIPLE",
                 rapidGun: "RAPID",
                 stickyHarpoon: "STICKY",
                 freeze: "FREEZE",
-                bomb: "FLASK"
+                bomb: "FLASK",
+                horse: "HORSE"
             };
 
             // --- update ---
@@ -1736,6 +1828,8 @@
                 updatePlayerBallCollision();
                 updateHazards(dt);
                 updatePowerUps(dt);
+                trySpawnBonusEntity(dt);
+                updateBonusEntity(dt);
                 updateBullets(dt);
                 updateHarpoons(dt);
                 updateEffects(dt);
@@ -1749,6 +1843,7 @@
                 weaponCalloutTimer = Math.max(0, weaponCalloutTimer - dt);
                 comboTimer = Math.max(0, comboTimer - dt);
                 freezeTimer = Math.max(0, freezeTimer - dt);
+                horseTimer = Math.max(0, horseTimer - dt);
                 invulnTimer = Math.max(0, invulnTimer - dt);
                 bulletCooldown = Math.max(0, bulletCooldown - dt);
                 startupBlinkTimer += dt;
@@ -1758,8 +1853,6 @@
             }
 
             function updateGameOverState() {
-                if (enteringScore) return;
-
                 if (consumeFirePress()) {
                     startGame();
                 }
@@ -1777,8 +1870,8 @@
                             currentMusicTrack = null;
                         }
 
-                        enteringScore = qualifiesForHighScore();
                         gameState = "gameover";
+                        notifyGameplayStop();
                     }
                 }
             }
@@ -1833,13 +1926,17 @@
 
                 player.moving = dir !== 0;
                 if (dir !== 0) player.facing = dir;
-                player.vx = dir * player.speed + levelWind * 0.35;
+                const effectiveSpeed = horseTimer > 0 ? player.speed * POWERUP.horseSpeedMultiplier : player.speed;
+                player.vx = dir * effectiveSpeed + levelWind * 0.35;
                 player.x += player.vx * dt;
                 player.x = clamp(player.x, player.w / 2, W - player.w / 2);
 
                 footstepTimer -= dt;
                 if (player.moving && footstepTimer <= 0 && !playerDead) {
-                    footstepTimer = 0.16;
+                    // Galloping is a quicker stride than walking, and gets an
+                    // actual hoofbeat sound on top of the dust - regular
+                    // footsteps stay silent (visual dust only).
+                    footstepTimer = horseTimer > 0 ? 0.1 : 0.16;
                     // drawPlayer() renders the knight at 1.5x scale around
                     // (player.x, player.y), so the on-screen feet sit ~1.5x
                     // further from player.y than the local sprite coordinates
@@ -1851,8 +1948,9 @@
                         life: 0.5,
                         speed: 16,
                         gravity: 0,
-                        color: "rgba(212,209,204,0.85)"
+                        color: horseTimer > 0 ? "rgba(146,64,14,0.85)" : "rgba(212,209,204,0.85)"
                     });
+                    if (horseTimer > 0) playSound("gallop", 0.5);
                 }
 
                 if (actionState.fire) {
@@ -1876,6 +1974,11 @@
                     }
 
                     ball.squash = Math.max(0, ball.squash - dt * 8);
+
+                    ball.blinkTimer -= dt;
+                    if (ball.blinkTimer <= -BLINK_DURATION) {
+                        ball.blinkTimer = BLINK_MIN_GAP + Math.random() * BLINK_GAP_RANGE;
+                    }
 
                     if (freezeTimer <= 0) {
                         handleBallWallBounce(ball);
@@ -2084,6 +2187,22 @@
                     freezeTimer = POWERUP.freezeDuration;
                     spawnScore(powerUp.x, powerUp.y, POWERUP_LABELS.freeze);
                     spawnParticles(powerUp.x, powerUp.y, { count: 8, radius: 2.5, life: 0.35, speed: 200, color: "#67e8f9" });
+
+                    // A single random creature reacts to the freeze with a
+                    // real vocal clip - tied to this one meaningful event
+                    // rather than every bounce, so it stays a rare flourish
+                    // instead of the constant bounce-chatter that used to
+                    // clash with pickup labels.
+                    if (balls.length > 0) {
+                        playSound("uhoh", 0.55);
+                    }
+                    return;
+                }
+
+                if (powerUp.type === "horse") {
+                    horseTimer = POWERUP.horseDuration;
+                    spawnScore(powerUp.x, powerUp.y, POWERUP_LABELS.horse);
+                    spawnParticles(powerUp.x, powerUp.y, { count: 10, radius: 2.5, life: 0.4, speed: 220, color: "#92400e" });
                 }
             }
 
@@ -2098,10 +2217,25 @@
                     }
 
                     if (handleBulletPowerUpCollision(bulletIndex, bullet)) continue;
+                    if (handleBulletBonusEntityCollision(bulletIndex, bullet)) continue;
                     if (handleBulletPlatformCollision(bulletIndex, bullet)) continue;
 
                     handleBulletBallCollision(bulletIndex, bullet);
                 }
+            }
+
+            function handleBulletBonusEntityCollision(bulletIndex, bullet) {
+                if (!bonusEntity) return false;
+
+                const dx = bonusEntity.x - bullet.x;
+                const dy = bonusEntity.y - bullet.y;
+                if ((dx * dx + dy * dy) < (BONUS_ENTITY_RADIUS * BONUS_ENTITY_RADIUS)) {
+                    bullets.splice(bulletIndex, 1);
+                    popBonusEntity();
+                    return true;
+                }
+
+                return false;
             }
 
             function handleBulletPowerUpCollision(bulletIndex, bullet) {
@@ -2129,7 +2263,7 @@
                     if (!pointInRect(bullet.x, bullet.y, platform.x, platform.y, platform.w, platform.h)) continue;
 
                     if (platform.type === "breakable") {
-                        breakPlatform(platformIndex);
+                        hitBreakablePlatform(platformIndex);
                     }
 
                     bullets.splice(bulletIndex, 1);
@@ -2191,10 +2325,26 @@
                         continue;
                     }
                     if (handleHarpoonPowerUpCollision(harpoonIndex, harpoon)) continue;
+                    if (handleHarpoonBonusEntityCollision(harpoonIndex, harpoon)) continue;
                     if (handleHarpoonPlatformCollision(harpoonIndex, harpoon)) continue;
 
                     handleHarpoonBallCollision(harpoonIndex, harpoon);
                 }
+            }
+
+            function handleHarpoonBonusEntityCollision(harpoonIndex, harpoon) {
+                if (!bonusEntity) return false;
+
+                const withinX = Math.abs(bonusEntity.x - harpoon.x) < BONUS_ENTITY_RADIUS;
+                const withinY = bonusEntity.y >= harpoon.yTop && bonusEntity.y <= harpoon.yBottom;
+
+                if (withinX && withinY) {
+                    harpoons.splice(harpoonIndex, 1);
+                    popBonusEntity();
+                    return true;
+                }
+
+                return false;
             }
 
             function handleHarpoonPowerUpCollision(harpoonIndex, harpoon) {
@@ -2226,7 +2376,7 @@
                     if (!withinX || !withinY) continue;
 
                     if (platform.type === "breakable") {
-                        breakPlatform(platformIndex);
+                        hitBreakablePlatform(platformIndex);
                     }
 
                     harpoons.splice(harpoonIndex, 1);
@@ -2306,8 +2456,13 @@
                 ctx.save();
 
                 applyScreenShake();
-                if (bgCache) {
-                    ctx.drawImage(bgCache, 0, 0, W, H);
+                if (bgFarCache && bgNearCache && bgFloorCache) {
+                    const centerOffset = player.x - W / 2;
+                    const farOffset = reduceMotion ? 0 : clamp(centerOffset * PARALLAX_FAR_STRENGTH, -PARALLAX_MARGIN, PARALLAX_MARGIN);
+                    const nearOffset = reduceMotion ? 0 : clamp(centerOffset * PARALLAX_NEAR_STRENGTH, -PARALLAX_MARGIN, PARALLAX_MARGIN);
+                    ctx.drawImage(bgFarCache, PARALLAX_MARGIN - farOffset, 0, W, H, 0, 0, W, H);
+                    ctx.drawImage(bgNearCache, PARALLAX_MARGIN - nearOffset, 0, W, H, 0, 0, W, H);
+                    ctx.drawImage(bgFloorCache, 0, 0, W, H);
                 } else {
                     drawBackground();
                     drawFloor();
@@ -2323,6 +2478,7 @@
                 drawBullets();
                 drawBallShadows();
                 drawBalls();
+                drawBonusEntity();
                 drawPops();
                 drawParticles();
                 drawScorePopups();
@@ -2342,93 +2498,6 @@
                 drawBorderText();
             }
 
-            function drawTopScores(x, y) {
-                ctx.textAlign = "center";
-
-                ctx.font = "bold 20px system-ui, sans-serif";
-                ctx.fillStyle = "#fde68a";
-                ctx.fillText("TOP 3", x, y);
-
-                for (let i = 0; i < 3; i++) {
-                    const entry = highScores[i];
-                    const yy = y + 30 + i * 24;
-
-                    let color = "#e5e7eb";
-                    if (i === 0) color = "#fde68a";
-                    else if (i === 1) color = "#d1d5db";
-                    else if (i === 2) color = "#fdba74";
-
-                    ctx.font = "bold 16px system-ui, sans-serif";
-                    ctx.fillStyle = color;
-
-                    if (entry) {
-                        const initials = entry.initials ?? entry.Initials;
-                        const points = entry.points ?? entry.Points;
-                        ctx.fillText(`${i + 1}. ${initials}  ${points}`, x, yy);
-                    } else {
-                        ctx.fillText(`${i + 1}. ---  0`, x, yy);
-                    }
-                }
-
-                ctx.textAlign = "left";
-            }
-
-            function drawFullScores(x, y) {
-                ctx.textAlign = "center";
-
-                ctx.fillStyle = "#fde68a";
-                ctx.font = "bold 30px system-ui, sans-serif";
-                ctx.fillText("HIGH SCORES", x, y);
-
-                const startY = y + 40;
-                const rankX = x - 220;
-                const initialsX = x - 110;
-                const scoreX = x + 30;
-                const levelX = x + 170;
-
-                ctx.textAlign = "left";
-                ctx.font = "bold 16px system-ui, sans-serif";
-                ctx.fillStyle = THEME.hud.frameInner;
-                ctx.fillText("RK", rankX, startY);
-                ctx.fillText("NAME", initialsX, startY);
-                ctx.fillText("SCORE", scoreX, startY);
-                ctx.fillText("LEVEL", levelX, startY);
-
-                for (let i = 0; i < 10; i++) {
-                    const entry = highScores[i];
-                    const rowY = startY + 30 + i * 24;
-
-                    let color = "#e5e7eb";
-                    if (i === 0) color = "#fde68a";
-                    else if (i === 1) color = "#d1d5db";
-                    else if (i === 2) color = "#fdba74";
-
-                    ctx.fillStyle = "rgba(15, 23, 42, 0.35)";
-                    ctx.fillRect(rankX - 12, rowY - 17, 470, 20);
-
-                    ctx.fillStyle = color;
-                    ctx.font = "bold 15px system-ui, sans-serif";
-                    ctx.fillText(`${i + 1}.`, rankX, rowY);
-
-                    if (entry) {
-                        const initials = entry.initials ?? entry.Initials;
-                        const points = entry.points ?? entry.Points;
-                        const level = entry.level ?? entry.Level;
-
-                        ctx.fillText(initials, initialsX, rowY);
-                        ctx.fillText(String(points), scoreX, rowY);
-                        ctx.fillText(String(level), levelX, rowY);
-                    } else {
-                        ctx.fillStyle = "#64748b";
-                        ctx.fillText("---", initialsX, rowY);
-                        ctx.fillText("0", scoreX, rowY);
-                        ctx.fillText("-", levelX, rowY);
-                    }
-                }
-
-                ctx.textAlign = "left";
-            }
-
             function applyScreenShake() {
                 let shakeX = 0;
                 let shakeY = 0;
@@ -2444,24 +2513,81 @@
             }
 
             function rebuildBgCache() {
-                const oc = document.createElement("canvas");
-                oc.width = W;
-                oc.height = H;
-                const oc_ctx = oc.getContext("2d");
-                drawBackground(oc_ctx);
-                drawFloor(oc_ctx);
-                bgCache = oc;
+                // Far (sky/sun/moon) and near (hills/trees) layers are cached
+                // extra-wide and separately from each other and the floor, so
+                // each can pan at its own rate each frame for a real sense of
+                // depth instead of the whole scene sliding as one flat sheet -
+                // without re-drawing gradients/shapes every frame. The floor
+                // the player actually stands on stays visually fixed underneath.
+                const far = document.createElement("canvas");
+                far.width = W + PARALLAX_MARGIN * 2;
+                far.height = H;
+                const far_ctx = far.getContext("2d");
+                far_ctx.translate(PARALLAX_MARGIN, 0);
+                drawBackground(far_ctx, "far");
+                bgFarCache = far;
+
+                const near = document.createElement("canvas");
+                near.width = W + PARALLAX_MARGIN * 2;
+                near.height = H;
+                const near_ctx = near.getContext("2d");
+                near_ctx.translate(PARALLAX_MARGIN, 0);
+                drawBackground(near_ctx, "near");
+                bgNearCache = near;
+
+                const floor = document.createElement("canvas");
+                floor.width = W;
+                floor.height = H;
+                const floor_ctx = floor.getContext("2d");
+                drawFloor(floor_ctx);
+                bgFloorCache = floor;
             }
 
             // Trunk + overlapping-circle canopy, reused across all three
             // background themes for tree silhouettes.
             function drawTreeSilhouette(c, x, groundY, canopyR, height) {
-                c.fillRect(x - 6, groundY - height * 0.4, 12, height * 0.4);
+                // Trunk height used to be a fixed fraction of `height`,
+                // independent of canopyR - for every actual call site canopyR
+                // was too small relative to height for that fraction to reach
+                // the canopy's underside, leaving the trunk floating below a
+                // visible gap. Anchor the trunk to the canopy's real bottom
+                // edge instead, with a small overlap so there's no seam.
+                const canopyCenterY = groundY - height;
+                const canopyBottomY = canopyCenterY + canopyR * 0.4 + canopyR * 0.7;
+                const trunkTopY = canopyBottomY - 8;
+                c.fillRect(x - 6, trunkTopY, 12, groundY - trunkTopY);
+
                 c.beginPath();
-                c.arc(x, groundY - height, canopyR, 0, Math.PI * 2);
-                c.arc(x - canopyR * 0.6, groundY - height + canopyR * 0.4, canopyR * 0.7, 0, Math.PI * 2);
-                c.arc(x + canopyR * 0.6, groundY - height + canopyR * 0.4, canopyR * 0.7, 0, Math.PI * 2);
+                c.arc(x, canopyCenterY, canopyR, 0, Math.PI * 2);
+                c.arc(x - canopyR * 0.6, canopyCenterY + canopyR * 0.4, canopyR * 0.7, 0, Math.PI * 2);
+                c.arc(x + canopyR * 0.6, canopyCenterY + canopyR * 0.4, canopyR * 0.7, 0, Math.PI * 2);
                 c.fill();
+            }
+
+            // Single-triangle conifer, for the cliffs scene.
+            function drawPineSilhouette(c, x, groundY, width, height) {
+                c.fillRect(x - width * 0.08, groundY - height * 0.22, width * 0.16, height * 0.22);
+                c.beginPath();
+                c.moveTo(x, groundY - height);
+                c.lineTo(x - width / 2, groundY - height * 0.2);
+                c.lineTo(x + width / 2, groundY - height * 0.2);
+                c.closePath();
+                c.fill();
+            }
+
+            // Three overlapping shards, for the cave scene's crystal outcrops.
+            function drawCrystalCluster(c, x, groundY, height) {
+                for (const side of [-1, 0, 1]) {
+                    const h = height * (side === 0 ? 1 : 0.6);
+                    const w = height * 0.28;
+                    const px = x + side * w * 1.1;
+                    c.beginPath();
+                    c.moveTo(px - w / 2, groundY);
+                    c.lineTo(px, groundY - h);
+                    c.lineTo(px + w / 2, groundY);
+                    c.closePath();
+                    c.fill();
+                }
             }
 
             // Ambient atmosphere (fireflies at night, drifting pollen otherwise).
@@ -2486,6 +2612,44 @@
                         ctx.arc(x, y, 1.6, 0, Math.PI * 2);
                         ctx.fill();
                     }
+                } else if (bg === "cave") {
+                    ctx.fillStyle = "rgba(196,181,253,0.85)";
+                    for (let i = 0; i < 12; i++) {
+                        const seed = i * 119.3;
+                        const x = (Math.sin(seconds * 0.22 + seed) * 0.5 + 0.5) * W;
+                        const y = 80 + (Math.sin(seconds * 0.13 + seed * 1.7) * 0.5 + 0.5) * (FLOOR_Y - 160);
+                        const twinkle = Math.max(0, Math.sin(seconds * 1.6 + seed));
+                        ctx.globalAlpha = 0.25 + twinkle * 0.65;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 1.8, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                } else if (bg === "volcanic") {
+                    ctx.fillStyle = "rgba(251,146,60,0.8)";
+                    for (let i = 0; i < 12; i++) {
+                        const seed = i * 83.1;
+                        const x = ((seed * 53) % W) + Math.sin(seconds * 0.5 + seed) * 12;
+                        const y = FLOOR_Y - ((seconds * 26 + seed * 31) % (FLOOR_Y - 60));
+                        const flicker = Math.max(0, Math.sin(seconds * 3 + seed));
+                        ctx.globalAlpha = 0.35 + flicker * 0.5;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 1.7, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                } else if (bg === "cliffs") {
+                    ctx.strokeStyle = "rgba(51,65,85,0.6)";
+                    ctx.lineWidth = 2;
+                    ctx.lineCap = "round";
+                    for (let i = 0; i < 4; i++) {
+                        const seed = i * 211.7;
+                        const x = ((seconds * 18 + seed) % (W + 120)) - 60;
+                        const y = 70 + (Math.sin(seconds * 0.25 + seed) * 0.5 + 0.5) * 100;
+                        ctx.beginPath();
+                        ctx.moveTo(x - 8, y);
+                        ctx.quadraticCurveTo(x - 4, y - 5, x, y);
+                        ctx.quadraticCurveTo(x + 4, y - 5, x + 8, y);
+                        ctx.stroke();
+                    }
                 } else {
                     ctx.fillStyle = "rgba(255,255,255,0.4)";
                     for (let i = 0; i < 10; i++) {
@@ -2501,113 +2665,346 @@
                 ctx.restore();
             }
 
-            function drawBackground(c = ctx) {
+            // Split into a distant "far" layer (sky, sun/moon, stars) and a
+            // closer "near" layer (hills/canopy, trees), so each can pan at
+            // its own rate for a real depth cue instead of the whole scene
+            // sliding as one flat sheet. The ground-level strip right above
+            // the floor is drawn in drawFloor() instead, fixed in place -
+            // it touches the (also fixed) floor bricks, so panning it
+            // separately created a visible seam between the two.
+            function drawBackground(c = ctx, layer = "all") {
                 const bg = LEVELS[levelIndex].bg;
+                const far = layer === "all" || layer === "far";
+                const near = layer === "all" || layer === "near";
+
                 if (highContrastMode) {
-                    c.fillStyle = "#0f172a";
-                    c.fillRect(0, 0, W, FLOOR_Y);
-                    c.fillStyle = "#1e3a8a";
-                    c.fillRect(0, FLOOR_Y - 30, W, 30);
+                    if (far) {
+                        c.fillStyle = "#0f172a";
+                        c.fillRect(-PARALLAX_MARGIN, 0, W + PARALLAX_MARGIN * 2, FLOOR_Y);
+                    }
                     return;
                 }
 
                 if (bg === "meadow") {
-                    c.fillStyle = THEME.env.skyMeadow;
-                    c.fillRect(0, 0, W, FLOOR_Y);
-
-                    c.fillStyle = THEME.env.canopyDark;
-                    c.beginPath();
-                    c.moveTo(0, FLOOR_Y - 90);
-                    c.quadraticCurveTo(140, FLOOR_Y - 150, 300, FLOOR_Y - 95);
-                    c.quadraticCurveTo(440, FLOOR_Y - 140, 620, FLOOR_Y - 100);
-                    c.quadraticCurveTo(760, FLOOR_Y - 130, W, FLOOR_Y - 85);
-                    c.lineTo(W, FLOOR_Y);
-                    c.lineTo(0, FLOOR_Y);
-                    c.closePath();
-                    c.fill();
-
-                    c.fillStyle = THEME.env.canopyMid;
-                    for (let x = 20; x < W; x += 70) {
-                        const bumpY = FLOOR_Y - 95 - Math.sin(x * 0.02) * 30;
-                        c.beginPath();
-                        c.arc(x, bumpY, 34, 0, Math.PI * 2);
-                        c.fill();
+                    if (far) {
+                        c.fillStyle = THEME.env.skyMeadow;
+                        c.fillRect(-PARALLAX_MARGIN, 0, W + PARALLAX_MARGIN * 2, FLOOR_Y);
                     }
 
-                    c.fillStyle = THEME.env.grassGround;
-                    c.fillRect(0, FLOOR_Y - 35, W, 35);
+                    if (near) {
+                        c.fillStyle = THEME.env.canopyDark;
+                        c.beginPath();
+                        c.moveTo(-PARALLAX_MARGIN, FLOOR_Y - 90);
+                        c.lineTo(0, FLOOR_Y - 90);
+                        c.quadraticCurveTo(140, FLOOR_Y - 150, 300, FLOOR_Y - 95);
+                        c.quadraticCurveTo(440, FLOOR_Y - 140, 620, FLOOR_Y - 100);
+                        c.quadraticCurveTo(760, FLOOR_Y - 130, W, FLOOR_Y - 85);
+                        c.lineTo(W + PARALLAX_MARGIN, FLOOR_Y - 85);
+                        c.lineTo(W + PARALLAX_MARGIN, FLOOR_Y);
+                        c.lineTo(-PARALLAX_MARGIN, FLOOR_Y);
+                        c.closePath();
+                        c.fill();
+
+                        c.fillStyle = THEME.env.canopyMid;
+                        for (let x = 20 - 70; x < W + PARALLAX_MARGIN; x += 70) {
+                            const bumpY = FLOOR_Y - 95 - Math.sin(x * 0.02) * 30;
+                            c.beginPath();
+                            c.arc(x, bumpY, 34, 0, Math.PI * 2);
+                            c.fill();
+                        }
+                    }
                     return;
                 }
 
                 if (bg === "sunset") {
-                    const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
-                    grad.addColorStop(0, "#f97316");
-                    grad.addColorStop(0.45, "#fb7185");
-                    grad.addColorStop(1, "#7c3aed");
-                    c.fillStyle = grad;
-                    c.fillRect(0, 0, W, FLOOR_Y);
+                    if (far) {
+                        const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
+                        grad.addColorStop(0, "#f97316");
+                        grad.addColorStop(0.45, "#fb7185");
+                        grad.addColorStop(1, "#7c3aed");
+                        c.fillStyle = grad;
+                        c.fillRect(-PARALLAX_MARGIN, 0, W + PARALLAX_MARGIN * 2, FLOOR_Y);
 
-                    const sunGrad = c.createRadialGradient(W - 140, 100, 0, W - 140, 100, 50);
-                    sunGrad.addColorStop(0, "#fffbeb");
-                    sunGrad.addColorStop(0.5, "rgba(255,240,150,0.9)");
-                    sunGrad.addColorStop(1, "rgba(255,220,120,0)");
-                    c.beginPath();
-                    c.arc(W - 140, 100, 50, 0, Math.PI * 2);
-                    c.fillStyle = sunGrad;
-                    c.fill();
+                        const sunGrad = c.createRadialGradient(W - 140, 100, 0, W - 140, 100, 50);
+                        sunGrad.addColorStop(0, "#fffbeb");
+                        sunGrad.addColorStop(0.5, "rgba(255,240,150,0.9)");
+                        sunGrad.addColorStop(1, "rgba(255,220,120,0)");
+                        c.beginPath();
+                        c.arc(W - 140, 100, 50, 0, Math.PI * 2);
+                        c.fillStyle = sunGrad;
+                        c.fill();
 
-                    c.beginPath();
-                    c.arc(W - 140, 100, 22, 0, Math.PI * 2);
-                    c.fillStyle = "#fff7c2";
-                    c.fill();
+                        c.beginPath();
+                        c.arc(W - 140, 100, 22, 0, Math.PI * 2);
+                        c.fillStyle = "#fff7c2";
+                        c.fill();
+                    }
 
-                    c.fillStyle = THEME.env.canopyDark;
-                    drawTreeSilhouette(c, 220, FLOOR_Y, 26, 150);
-                    drawTreeSilhouette(c, 560, FLOOR_Y, 34, 190);
-                    drawTreeSilhouette(c, 720, FLOOR_Y, 22, 130);
-
-                    c.fillStyle = THEME.env.grassGround;
-                    c.fillRect(0, FLOOR_Y - 28, W, 28);
+                    if (near) {
+                        c.fillStyle = THEME.env.canopyDark;
+                        drawTreeSilhouette(c, 220, FLOOR_Y, 26, 150);
+                        drawTreeSilhouette(c, 560, FLOOR_Y, 34, 190);
+                        drawTreeSilhouette(c, 720, FLOOR_Y, 22, 130);
+                    }
                     return;
                 }
 
                 if (bg === "night") {
-                    const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
-                    grad.addColorStop(0, "#020617");
-                    grad.addColorStop(1, "#0f172a");
-                    c.fillStyle = grad;
-                    c.fillRect(0, 0, W, FLOOR_Y);
+                    if (far) {
+                        const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
+                        grad.addColorStop(0, "#020617");
+                        grad.addColorStop(1, "#0f172a");
+                        c.fillStyle = grad;
+                        c.fillRect(-PARALLAX_MARGIN, 0, W + PARALLAX_MARGIN * 2, FLOOR_Y);
 
-                    const moonGrad = c.createRadialGradient(W - 120, 90, 0, W - 120, 90, 45);
-                    moonGrad.addColorStop(0, "#ffffff");
-                    moonGrad.addColorStop(0.55, "rgba(226,232,240,0.55)");
-                    moonGrad.addColorStop(1, "rgba(226,232,240,0)");
-                    c.beginPath();
-                    c.arc(W - 120, 90, 45, 0, Math.PI * 2);
-                    c.fillStyle = moonGrad;
-                    c.fill();
+                        const moonGrad = c.createRadialGradient(W - 120, 90, 0, W - 120, 90, 45);
+                        moonGrad.addColorStop(0, "#ffffff");
+                        moonGrad.addColorStop(0.55, "rgba(226,232,240,0.55)");
+                        moonGrad.addColorStop(1, "rgba(226,232,240,0)");
+                        c.beginPath();
+                        c.arc(W - 120, 90, 45, 0, Math.PI * 2);
+                        c.fillStyle = moonGrad;
+                        c.fill();
 
-                    c.beginPath();
-                    c.arc(W - 120, 90, 28, 0, Math.PI * 2);
-                    c.fillStyle = "#f8fafc";
-                    c.fill();
+                        c.beginPath();
+                        c.arc(W - 120, 90, 28, 0, Math.PI * 2);
+                        c.fillStyle = "#f8fafc";
+                        c.fill();
 
-                    c.fillStyle = "rgba(255,255,255,0.8)";
-                    for (const [x, y] of BACKGROUND_NIGHT_STARS) {
-                        c.fillRect(x, y, 2, 2);
+                        c.fillStyle = "rgba(255,255,255,0.8)";
+                        for (const [x, y] of BACKGROUND_NIGHT_STARS) {
+                            c.fillRect(x, y, 2, 2);
+                        }
                     }
 
-                    c.fillStyle = "#14251c";
-                    c.fillRect(0, FLOOR_Y - 55, W, 55);
+                    if (near) {
+                        c.fillStyle = "#0b1a12";
+                        for (let x = 10; x < W; x += 60) {
+                            drawTreeSilhouette(c, x, FLOOR_Y, 20, 55 + (x % 120 === 0 ? 30 : 10));
+                        }
+                    }
+                    return;
+                }
 
-                    c.fillStyle = "#0b1a12";
-                    for (let x = 10; x < W; x += 60) {
-                        drawTreeSilhouette(c, x, FLOOR_Y, 20, 55 + (x % 120 === 0 ? 30 : 10));
+                if (bg === "cliffs") {
+                    if (far) {
+                        const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
+                        grad.addColorStop(0, "#0ea5e9");
+                        grad.addColorStop(1, "#cffafe");
+                        c.fillStyle = grad;
+                        c.fillRect(-PARALLAX_MARGIN, 0, W + PARALLAX_MARGIN * 2, FLOOR_Y);
+
+                        const sunGrad = c.createRadialGradient(W - 130, 90, 0, W - 130, 90, 46);
+                        sunGrad.addColorStop(0, "#ffffff");
+                        sunGrad.addColorStop(0.5, "rgba(255,255,240,0.85)");
+                        sunGrad.addColorStop(1, "rgba(255,255,240,0)");
+                        c.beginPath();
+                        c.arc(W - 130, 90, 46, 0, Math.PI * 2);
+                        c.fillStyle = sunGrad;
+                        c.fill();
+
+                        c.beginPath();
+                        c.arc(W - 130, 90, 20, 0, Math.PI * 2);
+                        c.fillStyle = "#fffdf5";
+                        c.fill();
+                    }
+
+                    if (near) {
+                        // Distant, paler ridge behind a closer, darker one with
+                        // snow-cap highlights - two silhouettes at slightly
+                        // different heights read as depth without needing a
+                        // third parallax layer.
+                        c.fillStyle = "#94a3b8";
+                        c.beginPath();
+                        c.moveTo(-PARALLAX_MARGIN, FLOOR_Y - 60);
+                        c.lineTo(60, FLOOR_Y - 110);
+                        c.lineTo(180, FLOOR_Y - 60);
+                        c.lineTo(300, FLOOR_Y - 130);
+                        c.lineTo(420, FLOOR_Y - 65);
+                        c.lineTo(560, FLOOR_Y - 115);
+                        c.lineTo(680, FLOOR_Y - 55);
+                        c.lineTo(W, FLOOR_Y - 90);
+                        c.lineTo(W + PARALLAX_MARGIN, FLOOR_Y - 60);
+                        c.lineTo(W + PARALLAX_MARGIN, FLOOR_Y);
+                        c.lineTo(-PARALLAX_MARGIN, FLOOR_Y);
+                        c.closePath();
+                        c.fill();
+
+                        c.fillStyle = "#64748b";
+                        c.beginPath();
+                        c.moveTo(-PARALLAX_MARGIN, FLOOR_Y - 40);
+                        c.lineTo(120, FLOOR_Y - 140);
+                        c.lineTo(260, FLOOR_Y - 50);
+                        c.lineTo(400, FLOOR_Y - 160);
+                        c.lineTo(540, FLOOR_Y - 60);
+                        c.lineTo(700, FLOOR_Y - 150);
+                        c.lineTo(W, FLOOR_Y - 50);
+                        c.lineTo(W + PARALLAX_MARGIN, FLOOR_Y - 80);
+                        c.lineTo(W + PARALLAX_MARGIN, FLOOR_Y);
+                        c.lineTo(-PARALLAX_MARGIN, FLOOR_Y);
+                        c.closePath();
+                        c.fill();
+
+                        c.fillStyle = "rgba(248,250,252,0.85)";
+                        for (const [px, py] of [[120, FLOOR_Y - 140], [400, FLOOR_Y - 160], [700, FLOOR_Y - 150]]) {
+                            c.beginPath();
+                            c.moveTo(px - 16, py + 20);
+                            c.lineTo(px, py);
+                            c.lineTo(px + 16, py + 20);
+                            c.closePath();
+                            c.fill();
+                        }
+
+                        c.fillStyle = "#166534";
+                        drawPineSilhouette(c, 90, FLOOR_Y, 26, 70);
+                        drawPineSilhouette(c, 250, FLOOR_Y, 20, 55);
+                        drawPineSilhouette(c, 630, FLOOR_Y, 24, 65);
+                        drawPineSilhouette(c, 800, FLOOR_Y, 18, 50);
+                    }
+                    return;
+                }
+
+                if (bg === "cave") {
+                    if (far) {
+                        const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
+                        grad.addColorStop(0, "#0c0a1f");
+                        grad.addColorStop(1, "#1e1b3a");
+                        c.fillStyle = grad;
+                        c.fillRect(-PARALLAX_MARGIN, 0, W + PARALLAX_MARGIN * 2, FLOOR_Y);
+
+                        const crystalGrad = c.createRadialGradient(W - 160, 130, 0, W - 160, 130, 70);
+                        crystalGrad.addColorStop(0, "rgba(165,243,252,0.5)");
+                        crystalGrad.addColorStop(1, "rgba(165,243,252,0)");
+                        c.beginPath();
+                        c.arc(W - 160, 130, 70, 0, Math.PI * 2);
+                        c.fillStyle = crystalGrad;
+                        c.fill();
+
+                        c.fillStyle = "rgba(103,232,249,0.9)";
+                        for (const [x, y] of CAVE_CRYSTAL_GLINTS) {
+                            c.beginPath();
+                            c.arc(x, y, 2.2, 0, Math.PI * 2);
+                            c.fill();
+                        }
+                    }
+
+                    if (near) {
+                        // A silhouette color that's actually lighter than the
+                        // sky gradient, and stalagmites/crystals tall enough
+                        // to clear the ground strip drawn on top afterward in
+                        // drawFloor() - both were getting nearly swallowed.
+                        c.fillStyle = "#3b2564";
+                        for (let x = 10 - 90; x < W + PARALLAX_MARGIN; x += 90) {
+                            const len = 40 + Math.sin(x * 0.05) * 20;
+                            c.beginPath();
+                            c.moveTo(x - 22, 0);
+                            c.lineTo(x + 22, 0);
+                            c.lineTo(x, len);
+                            c.closePath();
+                            c.fill();
+                        }
+
+                        for (let x = 55 - 100; x < W + PARALLAX_MARGIN; x += 100) {
+                            const len = 70 + Math.cos(x * 0.04) * 20;
+                            c.beginPath();
+                            c.moveTo(x - 20, FLOOR_Y);
+                            c.lineTo(x + 20, FLOOR_Y);
+                            c.lineTo(x, FLOOR_Y - len);
+                            c.closePath();
+                            c.fill();
+                        }
+
+                        c.fillStyle = "#a855f7";
+                        drawCrystalCluster(c, 195, FLOOR_Y, 60);
+                        drawCrystalCluster(c, 630, FLOOR_Y, 52);
+                    }
+                    return;
+                }
+
+                if (bg === "volcanic") {
+                    if (far) {
+                        const grad = c.createLinearGradient(0, 0, 0, FLOOR_Y);
+                        grad.addColorStop(0, "#1c1917");
+                        grad.addColorStop(0.55, "#7c2d12");
+                        grad.addColorStop(1, "#ea580c");
+                        c.fillStyle = grad;
+                        c.fillRect(-PARALLAX_MARGIN, 0, W + PARALLAX_MARGIN * 2, FLOOR_Y);
+
+                        c.fillStyle = "#1c1917";
+                        c.beginPath();
+                        c.moveTo(W - 260, FLOOR_Y - 40);
+                        c.lineTo(W - 150, FLOOR_Y - 190);
+                        c.lineTo(W - 40, FLOOR_Y - 40);
+                        c.closePath();
+                        c.fill();
+
+                        const glowGrad = c.createRadialGradient(W - 150, FLOOR_Y - 190, 0, W - 150, FLOOR_Y - 190, 50);
+                        glowGrad.addColorStop(0, "rgba(253,186,116,0.9)");
+                        glowGrad.addColorStop(1, "rgba(253,186,116,0)");
+                        c.beginPath();
+                        c.arc(W - 150, FLOOR_Y - 190, 50, 0, Math.PI * 2);
+                        c.fillStyle = glowGrad;
+                        c.fill();
+                    }
+
+                    if (near) {
+                        c.fillStyle = "#0c0a09";
+                        c.beginPath();
+                        c.moveTo(-PARALLAX_MARGIN, FLOOR_Y - 60);
+                        c.lineTo(0, FLOOR_Y - 60);
+                        c.lineTo(90, FLOOR_Y - 120);
+                        c.lineTo(180, FLOOR_Y - 55);
+                        c.lineTo(300, FLOOR_Y - 135);
+                        c.lineTo(420, FLOOR_Y - 60);
+                        c.lineTo(560, FLOOR_Y - 115);
+                        c.lineTo(700, FLOOR_Y - 55);
+                        c.lineTo(W, FLOOR_Y - 90);
+                        c.lineTo(W + PARALLAX_MARGIN, FLOOR_Y - 60);
+                        c.lineTo(W + PARALLAX_MARGIN, FLOOR_Y);
+                        c.lineTo(-PARALLAX_MARGIN, FLOOR_Y);
+                        c.closePath();
+                        c.fill();
+
+                        c.strokeStyle = "#fb923c";
+                        c.lineWidth = 3;
+                        c.lineCap = "round";
+                        for (const [sx, sy, ex, ey] of VOLCANIC_LAVA_CRACKS) {
+                            c.beginPath();
+                            c.moveTo(sx, sy);
+                            c.lineTo(ex, ey);
+                            c.stroke();
+                        }
                     }
                 }
             }
 
             function drawFloor(c = ctx) {
+                const bg = LEVELS[levelIndex].bg;
+                if (highContrastMode) {
+                    c.fillStyle = "#1e3a8a";
+                    c.fillRect(0, FLOOR_Y - 30, W, 30);
+                } else if (bg === "meadow") {
+                    c.fillStyle = THEME.env.grassGround;
+                    c.fillRect(0, FLOOR_Y - 35, W, 35);
+                } else if (bg === "sunset") {
+                    c.fillStyle = THEME.env.grassGround;
+                    c.fillRect(0, FLOOR_Y - 28, W, 28);
+                } else if (bg === "night") {
+                    c.fillStyle = "#14251c";
+                    c.fillRect(0, FLOOR_Y - 55, W, 55);
+                } else if (bg === "cliffs") {
+                    c.fillStyle = "#78716c";
+                    c.fillRect(0, FLOOR_Y - 30, W, 30);
+                } else if (bg === "cave") {
+                    c.fillStyle = "#1c1917";
+                    c.fillRect(0, FLOOR_Y - 40, W, 40);
+                } else if (bg === "volcanic") {
+                    c.fillStyle = "#1c1917";
+                    c.fillRect(0, FLOOR_Y - 45, W, 45);
+                    c.fillStyle = "#f97316";
+                    c.fillRect(0, FLOOR_Y - 45, W, 4);
+                }
+
                 c.fillStyle = THEME.env.floorBase;
                 c.fillRect(0, FLOOR_Y, W, H - FLOOR_Y);
 
@@ -2664,11 +3061,11 @@
 
                     ctx.fillStyle = "#fde68a";
                     ctx.font = "bold 56px system-ui, sans-serif";
-                    ctx.fillText("SLIME SIEGE", W / 2, 92);
+                    ctx.fillText("EYES ON STALKS", W / 2, 92);
 
                     ctx.fillStyle = "#ffffff";
                     ctx.font = "18px system-ui, sans-serif";
-                    ctx.fillText("A Squishy Arcade Adventure", W / 2, 122);
+                    ctx.fillText("An Eye-Popping Arcade Adventure", W / 2, 122);
 
                     ctx.fillStyle = THEME.hud.textDim;
                     ctx.font = "18px system-ui, sans-serif";
@@ -2683,8 +3080,6 @@
                         ctx.font = "bold 30px system-ui, sans-serif";
                         ctx.fillText(startupActionText, W / 2, 240);
                     }
-
-                    drawTopScores(W / 2, 285);
 
                     ctx.textAlign = "left";
                 }
@@ -2703,66 +3098,20 @@
                     ctx.fillText(`Your Score: ${score}`, W / 2, 95);
                     ctx.fillText(`Level Reached: ${levelIndex + 1}`, W / 2, 125);
 
-                    if (enteringScore) {
-                        drawInitialsEntry(W / 2, 165);
-                    } else {
-                        drawFullScores(W / 2, 170);
-
-                        ctx.font = "22px system-ui, sans-serif";
-                        ctx.fillStyle = "#ffffff";
-                        ctx.fillText(restartActionText, W / 2, H - 28);
-                    }
+                    ctx.font = "22px system-ui, sans-serif";
+                    ctx.fillStyle = "#ffffff";
+                    ctx.fillText(restartActionText, W / 2, H - 28);
 
                     ctx.textAlign = "left";
                 }
             }
 
-            function drawInitialsEntry(x, y) {
-                ctx.textAlign = "center";
-
-                ctx.fillStyle = "#fde68a";
-                ctx.font = "bold 28px system-ui, sans-serif";
-                ctx.fillText("NEW HIGH SCORE!", x, y);
-
-                ctx.fillStyle = THEME.hud.textDim;
-                ctx.font = "18px system-ui, sans-serif";
-                ctx.fillText("Enter Your Initials", x, y + 32);
-
-                const startX = x - 50;
-                const boxY = y + 60;
-                const boxW = 28;
-                const boxH = 36;
-                const gap = 18;
-
-                for (let i = 0; i < 3; i++) {
-                    const bx = startX + i * (boxW + gap);
-
-                    ctx.fillStyle = i === initialsIndex ? "rgba(253, 230, 138, 0.25)" : "rgba(15, 23, 42, 0.45)";
-                    ctx.fillRect(bx, boxY, boxW, boxH);
-
-                    ctx.strokeStyle = i === initialsIndex ? THEME.hud.gold : THEME.hud.frameInner;
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(bx, boxY, boxW, boxH);
-
-                    ctx.fillStyle = "#ffffff";
-                    ctx.font = "bold 24px system-ui, sans-serif";
-                    ctx.fillText(initials[i], bx + boxW / 2, boxY + 26);
-                }
-
-                ctx.fillStyle = THEME.hud.textDim;
-                ctx.font = "16px system-ui, sans-serif";
-                ctx.fillText("Type letters  •  Tab moves  •  Enter confirms", x, boxY + 62);
-
-                drawFullScores(W / 2, boxY + 110);
-
-                ctx.textAlign = "left";
-            }
-
             // Covers Lance (1, no tint), Twin (2), Triple (3), and Pierce/Sticky
             // (1, tinted) - one shape, tint matches drawHarpoons()'s convention.
-            function drawHudLanceIcon(count, tint) {
+            // scale defaults to the small HUD-row size; falling pickups pass 1.
+            function drawHudLanceIcon(count, tint, scale = 0.65) {
                 ctx.save();
-                ctx.scale(0.65, 0.65);
+                ctx.scale(scale, scale);
 
                 const positions = count === 1 ? [0] : count === 2 ? [-10, 10] : [-12, 0, 12];
                 for (const ox of positions) {
@@ -2785,10 +3134,10 @@
                 ctx.restore();
             }
 
-            function drawHudGunIcon() {
+            function drawHudGunIcon(tint) {
                 ctx.save();
                 ctx.scale(0.65, 0.65);
-                drawGunPowerUp();
+                drawGunPowerUp(tint);
                 ctx.restore();
             }
 
@@ -2811,9 +3160,15 @@
                         continue;
                     }
                     const isSolid = platform.type === "solid";
-                    const fill = isSolid ? THEME.env.platformSolid : THEME.env.platformBreak;
-                    const top = isSolid ? THEME.env.platformSolidHi : THEME.env.platformBreakHi;
-                    const edge = isSolid ? THEME.env.platformSolidEdge : THEME.env.platformBreakEdge;
+                    let fill = isSolid ? THEME.env.platformSolid : THEME.env.platformBreak;
+                    let top = isSolid ? THEME.env.platformSolidHi : THEME.env.platformBreakHi;
+                    let edge = isSolid ? THEME.env.platformSolidEdge : THEME.env.platformBreakEdge;
+
+                    if (platform.reinforced) {
+                        fill = THEME.env.platformReinforced;
+                        top = THEME.env.platformReinforcedHi;
+                        edge = THEME.env.platformReinforcedEdge;
+                    }
 
                     const platGrad = ctx.createLinearGradient(0, platform.y, 0, platform.y + platform.h);
                     platGrad.addColorStop(0, top);
@@ -2840,6 +3195,20 @@
                         ctx.lineTo(x, platform.y + platform.h - 3);
                         ctx.stroke();
                     }
+
+                    if (platform.cracked) {
+                        const midY = platform.y + platform.h / 2;
+                        ctx.strokeStyle = "rgba(15,23,42,0.75)";
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(platform.x + platform.w * 0.25, platform.y + 2);
+                        ctx.lineTo(platform.x + platform.w * 0.35, midY);
+                        ctx.lineTo(platform.x + platform.w * 0.22, platform.y + platform.h - 2);
+                        ctx.moveTo(platform.x + platform.w * 0.65, platform.y + 2);
+                        ctx.lineTo(platform.x + platform.w * 0.58, midY);
+                        ctx.lineTo(platform.x + platform.w * 0.72, platform.y + platform.h - 2);
+                        ctx.stroke();
+                    }
                 }
             }
 
@@ -2856,6 +3225,10 @@
                 ctx.scale(scale, scale);
                 ctx.translate(-px, -py);
 
+                if (horseTimer > 0) {
+                    drawHorse(px, py, player.moving, player.facing, simulationTime * 16);
+                }
+
                 if (!player.moving) {
                     drawIdlePlayer(px, py);
                 } else {
@@ -2863,6 +3236,78 @@
                 }
 
                 ctx.restore();
+            }
+
+            // Drawn behind the knight sprite (same local coordinate space,
+            // same py+N offsets) when horseTimer is active - the knight's own
+            // draw is untouched, its boots just end up resting on the
+            // horse's back instead of the ground, which reads fine as
+            // "riding" without needing a separate mounted pose.
+            function drawHorse(px, py, moving, facing, phase) {
+                const bodyCX = px - facing * 2;
+                const bodyCY = py + 21;
+                const strideA = moving ? Math.sin(phase) * 8 : 0;
+                const strideB = moving ? Math.sin(phase + Math.PI) * 8 : 0;
+
+                ctx.strokeStyle = "#1c1917";
+                ctx.lineWidth = 3;
+                ctx.lineCap = "round";
+                for (const [ox, stride] of [[-10, strideA], [-4, strideB], [4, strideA], [10, strideB]]) {
+                    ctx.beginPath();
+                    ctx.moveTo(bodyCX + ox, bodyCY + 8);
+                    ctx.lineTo(bodyCX + ox + stride * 0.4, bodyCY + 20);
+                    ctx.stroke();
+                }
+
+                ctx.strokeStyle = "#451a03";
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(bodyCX - facing * 17, bodyCY - 2);
+                ctx.quadraticCurveTo(bodyCX - facing * 26, bodyCY + 6, bodyCX - facing * 22, bodyCY + 16);
+                ctx.stroke();
+
+                const bodyGrad = ctx.createLinearGradient(bodyCX, bodyCY - 9, bodyCX, bodyCY + 9);
+                bodyGrad.addColorStop(0, "#b45309");
+                bodyGrad.addColorStop(1, "#78350f");
+                ctx.fillStyle = bodyGrad;
+                ctx.beginPath();
+                ctx.ellipse(bodyCX, bodyCY, 17, 9, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                const neckBaseX = bodyCX + facing * 14;
+                const headX = neckBaseX + facing * 10;
+                const headY = bodyCY - 18;
+
+                ctx.fillStyle = "#92400e";
+                ctx.beginPath();
+                ctx.moveTo(neckBaseX - facing * 4, bodyCY - 8);
+                ctx.lineTo(neckBaseX + facing * 4, bodyCY - 10);
+                ctx.lineTo(headX + facing * 3, headY + 4);
+                ctx.lineTo(headX - facing * 4, headY + 6);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.ellipse(headX, headY, 6, 4.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.ellipse(headX + facing * 6, headY + 2, 3.5, 2.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.moveTo(headX - facing * 1, headY - 4);
+                ctx.lineTo(headX - facing * 3, headY - 9);
+                ctx.lineTo(headX + facing * 1, headY - 5);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.strokeStyle = "#451a03";
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.moveTo(headX - facing * 2, headY - 3);
+                ctx.lineTo(neckBaseX, bodyCY - 9);
+                ctx.stroke();
             }
 
             // Shared knight sprite used by the idle/moving player poses and by
@@ -2896,18 +3341,30 @@
                 ctx.beginPath();
                 ctx.arc(px, py + 3, 8, Math.PI, 0);
                 ctx.fill();
-                ctx.fillRect(px - 8, py - 1, 16, 4);
+
+                // Cheek guards hang down from the helmet's edge to flank the
+                // face, instead of a horizontal brim (which read as a
+                // rice-paddy hat rather than a knight's helm).
+                ctx.fillStyle = k.helmet;
+                ctx.fillRect(px - 8, py + 2, 3, 8);
+                ctx.fillRect(px + 5, py + 2, 3, 8);
+
+                ctx.fillStyle = k.armorLo;
+                ctx.fillRect(px - 1, py + 1, 2, 7);
 
                 ctx.fillStyle = "rgba(255,255,255,0.7)";
                 ctx.beginPath();
                 ctx.ellipse(px - 3, py, 2, 1.2, -0.4, 0, Math.PI * 2);
                 ctx.fill();
 
+                // Plume as a tall curved crest running front-to-back over the
+                // dome, like a Spartan-style helm crest - reads as "knight"
+                // much more clearly than the old small flat triangle did.
                 ctx.fillStyle = k.plume;
                 ctx.beginPath();
-                ctx.moveTo(px, py - 9);
-                ctx.lineTo(px - 3, py - 2);
-                ctx.lineTo(px + 3, py - 2);
+                ctx.moveTo(px - 2, py - 4);
+                ctx.quadraticCurveTo(px - 3, py - 13, px, py - 15);
+                ctx.quadraticCurveTo(px + 3, py - 13, px + 2, py - 4);
                 ctx.closePath();
                 ctx.fill();
 
@@ -3016,14 +3473,114 @@
                     const groundDist = FLOOR_Y - (by + ball.r);
                     const t = Math.max(0, Math.min(1, 1 - groundDist / 260));
 
-                    const shadowW = ball.r * (0.55 + t * 0.45);
-                    const shadowH = ball.r * 0.18 * (0.4 + t * 0.6);
-                    const alpha = 0.06 + t * 0.16;
+                    const shadowW = ball.r * (0.5 + t * 0.5);
+                    const shadowH = ball.r * 0.2 * (0.35 + t * 0.65);
+                    const alpha = 0.14 + t * 0.32;
 
                     ctx.beginPath();
                     ctx.ellipse(bx, FLOOR_Y - 4, shadowW, shadowH, 0, 0, Math.PI * 2);
                     ctx.fillStyle = `rgba(0,0,0,${alpha})`;
                     ctx.fill();
+                }
+            }
+
+            function drawBonusEntity() {
+                if (!bonusEntity) return;
+                const e = bonusEntity;
+                const x = lerp(e.prevX, e.x, renderAlpha);
+                const y = lerp(e.prevY, e.y, renderAlpha);
+
+                ctx.save();
+                ctx.translate(x, y);
+
+                const glow = ctx.createRadialGradient(0, 0, 4, 0, 0, 32);
+                glow.addColorStop(0, "rgba(253,224,71,0.35)");
+                glow.addColorStop(1, "rgba(253,224,71,0)");
+                ctx.beginPath();
+                ctx.arc(0, 0, 32, 0, Math.PI * 2);
+                ctx.fillStyle = glow;
+                ctx.fill();
+
+                const flapScale = 0.5 + Math.abs(Math.sin(e.t * 14)) * 0.5;
+                ctx.fillStyle = "rgba(224,242,254,0.75)";
+                for (const side of [-1, 1]) {
+                    ctx.beginPath();
+                    ctx.ellipse(side * 12, -2, 10, 5 * flapScale, side * -0.4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                const bodyGrad = ctx.createRadialGradient(-5, -5, 2, 0, 0, BONUS_ENTITY_RADIUS);
+                bodyGrad.addColorStop(0, "#fffbeb");
+                bodyGrad.addColorStop(0.5, "#fbbf24");
+                bodyGrad.addColorStop(1, "#b45309");
+                ctx.beginPath();
+                ctx.arc(0, 0, BONUS_ENTITY_RADIUS, 0, Math.PI * 2);
+                ctx.fillStyle = bodyGrad;
+                ctx.fill();
+                ctx.strokeStyle = "#78350f";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                for (const side of [-1, 1]) {
+                    ctx.beginPath();
+                    ctx.arc(side * 6, -2, 3.5, 0, Math.PI * 2);
+                    ctx.fillStyle = "#fefce8";
+                    ctx.fill();
+
+                    ctx.beginPath();
+                    ctx.arc(side * 6 + side, -1, 2, 0, Math.PI * 2);
+                    ctx.fillStyle = "#422006";
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+
+            // A single stalk, not a pair of legs - two thin dark limbs read as
+            // insect/spider legs, which was the creepy part. One thicker green
+            // stem stays upright, only leaning gently with horizontal motion
+            // (like it's trailing in the air) and compressing briefly on
+            // landing - no per-ball flailing, which looked too busy/samey.
+            function drawBallStalk(ball) {
+                const r = ball.r;
+                const hopT = ball.squash;
+                const lean = clamp(ball.vx * 0.0015, -0.35, 0.35);
+
+                const baseX = 0;
+                const baseY = r * 0.9;
+                const stalkLen = r * (0.85 - hopT * 0.3);
+                const tipX = baseX + Math.sin(lean) * stalkLen;
+                const tipY = baseY + Math.cos(lean) * stalkLen;
+                const midX = (baseX + tipX) / 2 + Math.sin(lean) * stalkLen * 0.2;
+                const midY = (baseY + tipY) / 2;
+                const width = Math.max(4, r * 0.22) * (1 - hopT * 0.25);
+
+                ctx.lineCap = "round";
+
+                // Dark outline pass first so the stalk reads clearly against
+                // the green grass instead of blending into it.
+                ctx.strokeStyle = "#14532d";
+                ctx.lineWidth = width + 3;
+                ctx.beginPath();
+                ctx.moveTo(baseX, baseY);
+                ctx.quadraticCurveTo(midX, midY, tipX, tipY);
+                ctx.stroke();
+
+                ctx.strokeStyle = "#22c55e";
+                ctx.lineWidth = width;
+                ctx.beginPath();
+                ctx.moveTo(baseX, baseY);
+                ctx.quadraticCurveTo(midX, midY, tipX, tipY);
+                ctx.stroke();
+
+                ctx.fillStyle = "#4ade80";
+                ctx.strokeStyle = "#14532d";
+                ctx.lineWidth = 1.5;
+                for (const side of [-1, 1]) {
+                    ctx.beginPath();
+                    ctx.ellipse(midX + side * r * 0.22, midY + r * 0.04, r * 0.2, r * 0.09, side * 0.6, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
                 }
             }
 
@@ -3038,6 +3595,10 @@
 
                     ctx.save();
                     ctx.translate(bx, by);
+
+                    drawBallStalk(ball);
+
+                    ctx.save();
                     ctx.scale(squashX, squashY);
 
                     if (!isTouchDevice) {
@@ -3045,14 +3606,13 @@
                         ctx.shadowColor = "rgba(20, 83, 45, 0.4)";
                     }
 
-                    const gradient = ctx.createRadialGradient(-ball.r * 0.3, -ball.r * 0.35, ball.r * 0.15, 0, 0, ball.r);
-                    gradient.addColorStop(0, THEME.slime.highlight);
-                    gradient.addColorStop(0.4, tierColor);
-                    gradient.addColorStop(1, THEME.slime.shadow);
-
+                    // Flat sclera fill, not a lit/shaded gradient - a shaded
+                    // glossy ball reads as a real eyeball/marble instead of a
+                    // toy. A single small highlight patch (drawn after the
+                    // rim below) does the "cartoon shiny" job instead.
                     ctx.beginPath();
                     ctx.arc(0, 0, ball.r, 0, Math.PI * 2);
-                    ctx.fillStyle = gradient;
+                    ctx.fillStyle = "#ffffff";
                     ctx.fill();
 
                     if (freezeTimer > 0 && shouldShowFrozenOverlay()) {
@@ -3064,40 +3624,68 @@
 
                     ctx.shadowBlur = 0;
 
-                    ctx.lineWidth = 2.5 / Math.max(squashX, squashY);
-                    ctx.strokeStyle = THEME.slime.outline;
+                    // Bold dark cartoon outline, with a thinner tier-color
+                    // ring just inside it so size is still readable.
+                    ctx.lineWidth = 5 / Math.max(squashX, squashY);
+                    ctx.strokeStyle = "#1e293b";
                     ctx.stroke();
 
-                    const eyeOffsetX = ball.r * 0.32;
-                    const eyeY = -ball.r * 0.1;
-                    const eyeR = Math.max(1.5, ball.r * 0.13);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, ball.r - 3.5 / Math.max(squashX, squashY), 0, Math.PI * 2);
+                    ctx.lineWidth = 2.5 / Math.max(squashX, squashY);
+                    ctx.strokeStyle = tierColor;
+                    ctx.stroke();
 
-                    // Pupils track the player so the slimes read as "hunting" rather
-                    // than static props - aimed at their chest, not their feet.
+                    ctx.beginPath();
+                    ctx.ellipse(-ball.r * 0.4, -ball.r * 0.45, ball.r * 0.22, ball.r * 0.12, -0.6, 0, Math.PI * 2);
+                    ctx.fillStyle = "rgba(255, 255, 255, 0.65)";
+                    ctx.fill();
+
+                    // One big eye tracking the player, rather than two small ones
+                    // on a face - the creature IS the eye now, not a blob with one.
                     const lookDx = player.x - bx;
                     const lookDy = (player.y + PLAYER.height * 0.5) - by;
                     const lookDist = Math.hypot(lookDx, lookDy) || 1;
-                    const pupilRange = eyeR * 0.4;
-                    const lookX = (lookDx / lookDist) * pupilRange;
-                    const lookY = (lookDy / lookDist) * pupilRange;
 
-                    for (const side of [-1, 1]) {
-                        ctx.beginPath();
-                        ctx.arc(side * eyeOffsetX, eyeY, eyeR, 0, Math.PI * 2);
-                        ctx.fillStyle = THEME.slime.eyeWhite;
-                        ctx.fill();
+                    const irisR = ball.r * 0.52;
+                    const pupilR = irisR * 0.42;
+                    const lookRange = (ball.r - irisR) * 0.7;
+                    const lookX = (lookDx / lookDist) * lookRange;
+                    const lookY = (lookDy / lookDist) * lookRange;
 
-                        ctx.beginPath();
-                        ctx.arc(side * eyeOffsetX + lookX, eyeY + eyeR * 0.25 + lookY, eyeR * 0.55, 0, Math.PI * 2);
-                        ctx.fillStyle = THEME.slime.eyePupil;
-                        ctx.fill();
+                    let eyeOpen = 1;
+                    if (ball.blinkTimer <= 0) {
+                        const t = Math.min(1, -ball.blinkTimer / BLINK_DURATION);
+                        eyeOpen = Math.abs(t - 0.5) * 2;
                     }
 
+                    ctx.save();
+                    ctx.translate(lookX, lookY);
+                    ctx.scale(1, Math.max(0.05, eyeOpen));
+
+                    // Flat colors and no outline between iris/pupil - a dark
+                    // ring around the iris is literally the "limbal ring"
+                    // trick used to make a drawn eye look photoreal, so it
+                    // stayed too realistic even after flattening the shading.
+                    // A big plain pupil dominating a thin color ring reads
+                    // as a toy/googly-eye instead.
                     ctx.beginPath();
-                    ctx.arc(-ball.r * 0.32, -ball.r * 0.38, ball.r * 0.16, 0, Math.PI * 2);
-                    ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+                    ctx.arc(0, 0, irisR, 0, Math.PI * 2);
+                    ctx.fillStyle = tierColor;
                     ctx.fill();
 
+                    ctx.beginPath();
+                    ctx.arc(0, 0, pupilR * 1.6, 0, Math.PI * 2);
+                    ctx.fillStyle = THEME.slime.eyePupil;
+                    ctx.fill();
+
+                    ctx.beginPath();
+                    ctx.arc(-irisR * 0.3, -irisR * 0.32, irisR * 0.22, 0, Math.PI * 2);
+                    ctx.fillStyle = "#ffffff";
+                    ctx.fill();
+
+                    ctx.restore();
+                    ctx.restore();
                     ctx.restore();
                 }
             }
@@ -3166,13 +3754,17 @@
                 if (!levelClear) return;
 
                 ctx.fillStyle = "#ffffff";
-                ctx.font = "bold 48px system-ui, sans-serif";
+                ctx.font = "bold 44px system-ui, sans-serif";
                 ctx.textAlign = "center";
-                ctx.fillText("LEVEL CLEAR", W / 2, H / 2);
+                ctx.fillText("LEVEL CLEAR", W / 2, H / 2 - 14);
+
+                ctx.fillStyle = "#bbf7d0";
+                ctx.font = "bold 22px system-ui, sans-serif";
+                ctx.fillText(`Wave ${levelIndex + 1}: ${LEVELS[levelIndex].name}`, W / 2, H / 2 + 20);
 
                 ctx.fillStyle = "#fde68a";
                 ctx.font = "bold 24px system-ui, sans-serif";
-                ctx.fillText(`TIME BONUS ${Math.ceil(timeLeft) * 10}`, W / 2, H / 2 + 40);
+                ctx.fillText(`TIME BONUS ${Math.ceil(timeLeft) * 10}`, W / 2, H / 2 + 54);
 
                 ctx.textAlign = "left";
             }
@@ -3252,7 +3844,7 @@
                     ctx.fillStyle = "rgba(255,255,255,0.08)";
                     ctx.fill();
 
-                    drawMysteryPickup(powerUp.anim || 0);
+                    drawPowerUpIcon(powerUp.type);
 
                     ctx.restore();
                 }
@@ -3260,38 +3852,33 @@
                 ctx.textAlign = "left";
             }
 
-            // Every falling pickup looks identical - the player finds out
-            // what it is only on collection (see equipWeapon()/applyPowerUp(),
-            // which spawn the label popup + color-matched particle burst).
-            function drawMysteryPickup(anim) {
-                const pulse = 0.5 + 0.5 * Math.sin(anim * 2);
-
-                const grad = ctx.createRadialGradient(-4, -4, 2, 0, 0, 16);
-                grad.addColorStop(0, "#fefce8");
-                grad.addColorStop(0.5, `rgba(253,230,138,${0.55 + pulse * 0.25})`);
-                grad.addColorStop(1, "rgba(180,150,60,0.15)");
-
-                ctx.beginPath();
-                ctx.arc(0, 0, 16, 0, Math.PI * 2);
-                ctx.fillStyle = grad;
-                ctx.fill();
-
-                ctx.strokeStyle = `rgba(253,230,138,${0.6 + pulse * 0.4})`;
-                ctx.lineWidth = 2;
-                ctx.stroke();
-
-                ctx.fillStyle = "#422006";
-                ctx.font = "bold 16px system-ui, sans-serif";
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
-                ctx.fillText("?", 0, 1);
-                ctx.textBaseline = "alphabetic";
+            function drawPowerUpIcon(type) {
+                if (type === "freeze") {
+                    drawFreezePowerUp();
+                } else if (type === "bomb") {
+                    drawFlaskPowerUp();
+                } else if (type === "gun") {
+                    drawGunPowerUp(null);
+                } else if (type === "rapidGun") {
+                    drawGunPowerUp(THEME.weapon.rapidTint);
+                } else if (type === "twin") {
+                    drawHudLanceIcon(2, null, 1);
+                } else if (type === "tripleHarpoon") {
+                    drawHudLanceIcon(3, null, 1);
+                } else if (type === "pierceHarpoon") {
+                    drawHudLanceIcon(1, THEME.weapon.pierceTip, 1);
+                } else if (type === "stickyHarpoon") {
+                    drawHudLanceIcon(1, THEME.weapon.stickyColor, 1);
+                }
             }
 
-            function drawGunPowerUp() {
+            // tint set => Rapid Blaster: same shape, cyan instead of purple,
+            // plus extra speed-lines trailing the shaft so it doesn't just
+            // look like a recolored Blaster at a glance.
+            function drawGunPowerUp(tint) {
                 ctx.save();
 
-                // wand shaft
+                // blaster shaft
                 ctx.strokeStyle = THEME.weapon.lanceShaft;
                 ctx.lineWidth = 4;
                 ctx.lineCap = "round";
@@ -3302,18 +3889,18 @@
                 ctx.lineCap = "butt";
 
                 // glowing tip
-                ctx.fillStyle = THEME.weapon.boltGlow;
+                ctx.fillStyle = tint || THEME.weapon.boltGlow;
                 ctx.beginPath();
                 ctx.arc(9, -14, 8, 0, Math.PI * 2);
                 ctx.fill();
 
-                ctx.fillStyle = THEME.weapon.boltCore;
+                ctx.fillStyle = tint ? "#ffffff" : THEME.weapon.boltCore;
                 ctx.beginPath();
                 ctx.arc(9, -14, 4, 0, Math.PI * 2);
                 ctx.fill();
 
                 // sparkle accents
-                ctx.strokeStyle = THEME.weapon.boltGlow;
+                ctx.strokeStyle = tint || THEME.weapon.boltGlow;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(9, -25);
@@ -3323,6 +3910,50 @@
                 ctx.moveTo(15, -7);
                 ctx.lineTo(19, -7);
                 ctx.stroke();
+
+                if (tint) {
+                    ctx.beginPath();
+                    ctx.moveTo(-14, 12);
+                    ctx.lineTo(-19, 17);
+                    ctx.moveTo(-7, 7);
+                    ctx.lineTo(-12, 12);
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            }
+
+            function drawFlaskPowerUp() {
+                ctx.save();
+
+                ctx.fillStyle = "#78350f";
+                ctx.fillRect(-4, -22, 8, 5);
+                ctx.fillStyle = THEME.hud.gold;
+                ctx.fillRect(-3, -18, 6, 8);
+
+                ctx.beginPath();
+                ctx.moveTo(-3, -10);
+                ctx.lineTo(3, -10);
+                ctx.lineTo(11, 8);
+                ctx.quadraticCurveTo(11, 16, 0, 16);
+                ctx.quadraticCurveTo(-11, 16, -11, 8);
+                ctx.closePath();
+
+                const grad = ctx.createLinearGradient(0, -10, 0, 16);
+                grad.addColorStop(0, "rgba(249,115,22,0.35)");
+                grad.addColorStop(1, THEME.weapon.flaskLiquid);
+                ctx.fillStyle = grad;
+                ctx.fill();
+
+                ctx.strokeStyle = "rgba(255,255,255,0.75)";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.fillStyle = "rgba(255,255,255,0.65)";
+                ctx.beginPath();
+                ctx.arc(-3, 6, 2, 0, Math.PI * 2);
+                ctx.arc(3, 10, 1.5, 0, Math.PI * 2);
+                ctx.fill();
 
                 ctx.restore();
             }
@@ -3419,8 +4050,10 @@
                     ctx.save();
                     ctx.translate(iconX, iconY);
 
-                    if (weaponType === "gun" || weaponType === "rapidGun") {
-                        drawHudGunIcon();
+                    if (weaponType === "gun") {
+                        drawHudGunIcon(null);
+                    } else if (weaponType === "rapidGun") {
+                        drawHudGunIcon(THEME.weapon.rapidTint);
                     } else if (weaponType === "twinHarpoon") {
                         drawHudLanceIcon(2, null);
                     } else if (weaponType === "tripleHarpoon") {
@@ -3436,10 +4069,16 @@
                     ctx.restore();
                 }
 
+                // Both status rows share this counter (rather than each
+                // hard-coding rowIndex+1.1) so freeze and horse stack
+                // cleanly under WEAPON instead of overlapping if both happen
+                // to be active at once.
+                let statusRow = 1;
+
                 if (freezeTimer > 0) {
                     const shouldDraw = freezeTimer >= 2 || Math.floor(freezeTimer * 10) % 2 === 0;
                     if (shouldDraw) {
-                        const yy = y + gap * (rowIndex + 1.1);
+                        const yy = y + gap * (rowIndex + statusRow + 0.1);
 
                         ctx.font = "bold 12px system-ui, sans-serif";
                         ctx.fillStyle = labelColor;
@@ -3455,6 +4094,26 @@
                         ctx.fillStyle = "#67e8f9";
                         ctx.fillText(`${freezeTimer.toFixed(1)}s`, x + 124, yy);
                     }
+                    statusRow++;
+                }
+
+                if (horseTimer > 0) {
+                    const yy = y + gap * (rowIndex + statusRow + 0.1);
+
+                    ctx.font = "bold 12px system-ui, sans-serif";
+                    ctx.fillStyle = labelColor;
+                    ctx.fillText("HORSE", x, yy);
+
+                    ctx.save();
+                    ctx.translate(x + 86, yy - 4);
+                    ctx.scale(0.4, 0.4);
+                    drawHorse(0, -21, false, 1, 0);
+                    ctx.restore();
+
+                    ctx.font = "bold 16px system-ui, sans-serif";
+                    ctx.fillStyle = "#d97706";
+                    ctx.fillText(`${horseTimer.toFixed(1)}s`, x + 124, yy);
+                    statusRow++;
                 }
 
                 ctx.restore();
@@ -3518,7 +4177,7 @@
                 ctx.textAlign = "center";
                 ctx.font = "12px system-ui, sans-serif";
                 ctx.fillStyle = THEME.hud.text;
-                ctx.fillText("© Gloop Forge Games", W / 2, H - BORDER - 4);
+                ctx.fillText("© Datahandler Games", W / 2, H - BORDER - 4);
                 ctx.restore();
             }
 
@@ -3569,11 +4228,8 @@
             });
             resizeCanvasToViewport();
             rebuildBgCache();
-
-            (async () => {
-                await loadHighScores();
-                requestAnimationFrame(tick);
-            })();
+            notifyLoadingStop();
+            requestAnimationFrame(tick);
         })();
     </script>
 </body>
